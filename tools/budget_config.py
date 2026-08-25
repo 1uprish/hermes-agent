@@ -14,34 +14,49 @@ DEFAULT_PREVIEW_SIZE_CHARS: int = 1_500
 
 # Tighter per-result default for ``mcp_`` tools: MCP servers routinely return
 # un-paginated 20-50K payloads that sail under the generic 100K threshold; spillover
-# keeps the full payload on disk. Config: ``tool_budget.mcp_result_size_chars``.
+# keeps the full payload on disk. Config: ``tool_output.mcp_result_size_chars``.
 DEFAULT_MCP_RESULT_SIZE_CHARS: int = 50_000
 # Same prefix the untrusted-content wrapper keys on (agent/tool_dispatch_helpers.py).
 MCP_TOOL_PREFIX: str = "mcp_"
 
 
-def _configured_mcp_result_size() -> int:
-    """Read ``tool_budget.mcp_result_size_chars`` via ``load_config_readonly`` (the
-    sanctioned path; raw config.yaml parsing outside owner modules is test-guarded).
-    Any error, missing key or non-positive value returns the built-in default.
+def _configured_budget_block() -> dict:
+    """Return the spillover config block, preferring the recognized ``tool_output`` key.
 
-    The ``tool_budget:`` block name is shared with the wider configurable-caps proposal (#80508) so the two
-    can merge without a key rename.
+    ``tool_budget`` was the short-lived original spelling (shared with #80508). Keep it
+    as a read-only compatibility fallback so existing installations do not silently
+    lose their MCP threshold after upgrading. Goes through ``load_config_readonly``
+    (the sanctioned path; raw config.yaml parsing outside owner modules is test-guarded).
     """
     try:
         from hermes_cli.config import load_config_readonly
         data = load_config_readonly()
-        block = data.get("tool_budget") if isinstance(data, dict) else None
-        raw = block.get("mcp_result_size_chars") if isinstance(block, dict) else None
-        if raw is not None and int(raw) > 0:
-            return int(raw)
+        if not isinstance(data, dict):
+            return {}
+        primary = data.get("tool_output")
+        if isinstance(primary, dict):
+            return primary
+        legacy = data.get("tool_budget")
+        return legacy if isinstance(legacy, dict) else {}
+    except Exception:
+        return {}
+
+
+def _configured_mcp_result_size() -> int:
+    """Read ``tool_output.mcp_result_size_chars`` from active config."""
+    try:
+        raw = _configured_budget_block().get("mcp_result_size_chars")
+        if raw is not None and not isinstance(raw, bool):
+            value = int(raw)
+            if value > 0:
+                return value
     except Exception:
         pass
     return DEFAULT_MCP_RESULT_SIZE_CHARS
 
 
 def _configured_tool_overrides() -> Dict[str, int]:
-    """Read positive per-tool spill thresholds from ``tool_budget``.
+    """Read positive per-tool spill thresholds from ``tool_output``.
 
     Tool handlers and providers do not always keep their documented result
     shape bounded. A named override lets an operator spill a known-chatty tool
@@ -49,11 +64,7 @@ def _configured_tool_overrides() -> Dict[str, int]:
     model's context window. Invalid entries are ignored fail-closed.
     """
     try:
-        from hermes_cli.config import load_config_readonly
-
-        data = load_config_readonly()
-        block = data.get("tool_budget") if isinstance(data, dict) else None
-        raw = block.get("tool_overrides") if isinstance(block, dict) else None
+        raw = _configured_budget_block().get("tool_overrides")
         if not isinstance(raw, dict):
             return {}
         overrides: Dict[str, int] = {}
