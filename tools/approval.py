@@ -306,6 +306,7 @@ def approve_permanent(pattern_key: str):
 def load_permanent(patterns: set):
     """Bulk-load permanent allowlist entries from config."""
     with _lock:
+        _permanent_approved.clear()
         _permanent_approved.update(patterns)
 
 
@@ -356,8 +357,7 @@ def load_permanent_allowlist() -> set:
         if legacy:
             logger.warning("Recovered legacy string command_allowlist; re-save it as a list of strings.")
         patterns = set(raw)
-        if patterns:
-            load_permanent(patterns)
+        load_permanent(patterns)
         with _lock:
             _permanent_baseline = set(patterns)
         return patterns
