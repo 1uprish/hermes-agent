@@ -114,17 +114,21 @@ def _preamble(evt: dict, title: str, intro: str, completed_at: float, *, with_go
 
 
 def _format_batch_delegation(evt: dict, deleg_id: str, completed_at: float) -> str:
-    """Consolidated block for a delegate_task fan-out that finished as one unit."""
+    """Block for a delegate_task fan-out: one child delivered on its own (``batch_id`` set), or the aggregate
+    carrying whatever was not already delivered."""
     results, goals = evt.get("results") or [], evt.get("goals") or []
-    n = len(results) if results else len(goals)
-    lines = _preamble(
-        evt,
-        f"[ASYNC DELEGATION BATCH COMPLETE — {deleg_id}]",
-        f"A background fan-out of {n} subagent(s) you dispatched earlier "
-        "has finished. All ran in parallel and waited on each other; their "
-        "consolidated results are below. You may have moved on since "
-        "dispatching — act on these or re-dispatch if things have changed.",
-        completed_at, with_goal=False)
+    n = len(goals) or len(results)
+    if evt.get("batch_id"):
+        title = f"[ASYNC DELEGATION TASK COMPLETE — {evt['batch_id']}, task {int(evt.get('task_index', 0)) + 1}/{n}]"
+        intro = ("One subagent of a background fan-out you dispatched earlier has finished; its siblings arrive "
+                 "separately as they finish. You may have moved on since dispatching — act on this result or "
+                 "re-dispatch if things have changed.")
+    else:
+        title = f"[ASYNC DELEGATION BATCH COMPLETE — {deleg_id}]"
+        intro = (f"A background fan-out of {n} subagent(s) you dispatched earlier has finished. Results already "
+                 "delivered as their subagents finished are not repeated below. You may have moved on since "
+                 "dispatching — act on these or re-dispatch if things have changed.")
+    lines = _preamble(evt, title, intro, completed_at, with_goal=False)
     lines[-1] += f"   Total duration: {evt.get('total_duration_seconds', evt.get('duration_seconds', '?'))}s"
     if evt.get("error") and not results:
         lines += ["--- ERROR ---", f"The batch did not complete successfully: {evt['error']}"]

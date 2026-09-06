@@ -1,6 +1,6 @@
 """Batch execution + background dispatch for delegate_task: ``delegate_task`` builds a ``_Batch``
 (children + origin identity) and hands it to ``_run_batch``, which runs it synchronously or as ONE
-detached async unit."""
+detached async unit whose children are each delivered the moment they finish."""
 
 from __future__ import annotations
 
@@ -89,11 +89,30 @@ def _report_child_done(parent_agent, spinner_ref, entry, tag, task_labels, n_tas
         with _quiet("Spinner update_text failed: %s"):
             spinner_ref.update_text(f"🔀 {'[' + tag + '] ' if tag else ''}{remaining} task{'s' if remaining != 1 else ''} remaining")
 
-def _run_children_parallel(batch: _Batch, results: list, *, honor_parent_interrupt: bool) -> None:
+def _finalize_live_transcript(batch: _Batch, entry: Dict[str, Any]) -> None:
+    """End-marker the child's live transcript and stamp its path on the entry."""
+    _idx = entry.get("task_index", -1)
+    if isinstance(_idx, int) and 0 <= _idx < len(batch.live_writers) and batch.live_writers[_idx] is not None:
+        with _quiet("Live transcript finalize failed", exc_info=True):
+            batch.live_writers[_idx].finalize(entry)
+        if _idx < len(batch.live_paths):
+            entry["live_transcript"] = batch.live_paths[_idx]
+
+def _publish_ready_child(batch: _Batch, entry: Dict[str, Any]) -> None:
+    """Detached batch: settle one finished child (summary budget, hooks, cost) and deliver it NOW as its own
+    completion instead of holding it behind slower siblings. A failed publish leaves the child to the aggregate."""
+    _finalize_child_results([entry], batch.task_list, batch.children, batch.parent_agent)
+    _finalize_live_transcript(batch, entry)
+    with _quiet("Ready child publish failed", exc_info=True):
+        from tools.async_delegation import publish_batch_child
+        publish_batch_child(str(batch.live_deleg_id or ""), entry["task_index"], entry)
+
+def _run_children_parallel(batch: _Batch, results: list, *, honor_parent_interrupt: bool, on_done=None) -> None:
     """Run the batch's children in parallel, appending entries to ``results`` (sorted by task_index on return, one
     completion line printed per child). Polls futures with a short ``wait()`` timeout instead of ``as_completed()``
     so a wedged child cannot block the parent forever after an interrupt; on parent interrupt the still-pending
-    children are reported ``interrupted`` and abandoned (they already got the interrupt signal)."""
+    children are reported ``interrupted`` and abandoned (they already got the interrupt signal). ``on_done``
+    sees each finished entry as it lands (detached batches publish it right away)."""
     # Daemon workers (tools.daemon_pool): the `with` block still joins normally, but if the parent is interrupted
     # while a child is wedged, the abandoned worker must not block interpreter exit.
     from tools.daemon_pool import DaemonThreadPoolExecutor
@@ -125,30 +144,30 @@ def _run_children_parallel(batch: _Batch, results: list, *, honor_parent_interru
             for future in done:
                 entry = _entry_of(future, futures[future])
                 results.append(entry)
+                if on_done is not None:
+                    on_done(entry)
                 _report_child_done(parent_agent, spinner_ref, entry, _tag, task_labels, n_tasks, n_tasks - len(results))
     results.sort(key=lambda r: r["task_index"])  # match input order
 
 def _execute_and_aggregate(batch: _Batch, *, honor_parent_interrupt: bool = True) -> dict:
-    """Run all built children, join, finalize (hooks + cost rollup), return the combined dict. Shared by the sync path
-    and the background runner: even in the background the batch JOINS on itself here so ONE consolidated results
-    block re-enters the conversation. Live transcripts are finalized but retained as the full-fidelity record
-    (retention pruning happens on future dispatches)."""
+    """Run all built children, join, return the combined dict. The sync path finalizes (hooks + cost rollup) at the
+    join; the background runner (``honor_parent_interrupt=False``) finalizes and PUBLISHES each child as it finishes,
+    so the aggregate only carries what was not already delivered. Live transcripts are finalized but retained as the
+    full-fidelity record (retention pruning happens on future dispatches)."""
     from tools.delegation_live_log import update_manifest_statuses
     results: list = []
+    # Only a fan-out has siblings to wait behind; a single detached task keeps its one aggregate completion.
+    on_done = None if honor_parent_interrupt or len(batch.task_list) == 1 else (lambda entry: _publish_ready_child(batch, entry))
     if len(batch.task_list) == 1:
         results.append(batch.run_child(*batch.children[0]))
     else:
-        _run_children_parallel(batch, results, honor_parent_interrupt=honor_parent_interrupt)
+        _run_children_parallel(batch, results, honor_parent_interrupt=honor_parent_interrupt, on_done=on_done)
 
-    _finalize_child_results(results, batch.task_list, batch.children, batch.parent_agent)
+    if on_done is None:
+        _finalize_child_results(results, batch.task_list, batch.children, batch.parent_agent)
+        for entry in results:
+            _finalize_live_transcript(batch, entry)
     total_duration = round(time.monotonic() - batch.overall_start, 2)
-    for entry in results:
-        _idx = entry.get("task_index", -1)
-        if isinstance(_idx, int) and 0 <= _idx < len(batch.live_writers) and batch.live_writers[_idx] is not None:
-            with _quiet("Live transcript finalize failed", exc_info=True):
-                batch.live_writers[_idx].finalize(entry)
-            if _idx < len(batch.live_paths):
-                entry["live_transcript"] = batch.live_paths[_idx]
     update_manifest_statuses(batch.live_deleg_id, results)
 
     combined: Dict[str, Any] = {"results": results, "total_duration_seconds": total_duration}
@@ -256,9 +275,9 @@ _BACKGROUND_NOTES = {
         "conversation as a new message when it finishes. Do not wait or poll — just continue."
     ),
     "many": (
-        "{n} subagents are running in parallel in the background. You and the user can keep working; they wait on "
-        "each other and their consolidated results re-enter the conversation as a single message once ALL of them "
-        "finish. Do not wait or poll — just continue."
+        "{n} subagents are running in parallel in the background. You and the user can keep working; each one's "
+        "result re-enters the conversation as soon as it finishes (several finishing together arrive as one "
+        "message). Do not wait or poll — just continue."
     ),
     "control_hint": (
         "While a child runs you can orchestrate it live with this same tool: delegate_task(action='list') to see live "
@@ -288,17 +307,19 @@ def _dispatched_payload(dispatch: dict, goals: List[str], child_agents: List[Any
     return payload
 
 def _dispatch_background(batch: _Batch) -> str:
-    """Dispatch the WHOLE batch as one async unit and return the tool result JSON. The runner joins on every child and
-    yields ONE consolidated results block that re-enters the conversation as a single message when ALL children
-    finish. Falls back to running synchronously (with an explanatory ``note``) when the session cannot receive
-    detached completions or the async pool is at capacity."""
+    """Dispatch the WHOLE batch as one async unit (one pool slot, one stall monitor) and return the tool result JSON.
+    Each child is delivered as it finishes; the aggregate completion carries only what was not already delivered.
+    Falls back to running synchronously (with an explanatory ``note``) when the session cannot receive detached
+    completions or the async pool is at capacity."""
     from tools.delegate_tool import _get_max_async_children
-    from tools.async_delegation import dispatch_async_delegation_batch
+    from tools.async_delegation import _new_delegation_id, dispatch_async_delegation_batch
     wake_sid = _resolve_async_wake_sid(batch.origin_wake_sid)
     if wake_sid is None:
         logger.info("delegate_task: async delivery unsupported on this session runtime; running the batch synchronously instead.")
         return _run_sync_with_note(batch, "no_async")
 
+    # Children publish under the batch id, so it must exist even when live transcripts could not be created.
+    batch.live_deleg_id = batch.live_deleg_id or _new_delegation_id()
     parent_agent = batch.parent_agent
     session_key, origin_ui_session_id = _resolve_async_session_key(parent_agent, batch.origin_ui_session_id)
     child_agents = [c for (_, _, c) in batch.children]

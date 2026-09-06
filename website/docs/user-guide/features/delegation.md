@@ -117,7 +117,7 @@ delegate_task(
 
 ## Batch Mode Details
 
-When a top-level agent provides a `tasks` array, Hermes returns one background handle, runs the subagents in parallel, and posts one consolidated result after every child finishes. An orchestrator subagent waits for its batch in the current turn so it can synthesize the results.
+When a top-level agent provides a `tasks` array, Hermes returns one background handle, runs the subagents in parallel, and posts each child's result back as soon as that child finishes — a fast child is never held behind a slow sibling (children that finish in the same drain arrive as one message). Each delivered child is its own durable completion (`<delegation_id>.<task_index>`), so a restart replays only what was not yet delivered. An orchestrator subagent waits for its batch in the current turn so it can synthesize the results.
 
 - **Maximum concurrency:** 3 tasks by default (configurable via `delegation.max_concurrent_children` or the `DELEGATION_MAX_CONCURRENT_CHILDREN` env var; floor of 1, no hard ceiling). Batches larger than the limit return a tool error rather than being silently truncated.
 - **Thread pool:** Uses `ThreadPoolExecutor` with the configured concurrency limit as max workers

@@ -208,14 +208,69 @@ def _prune_durable_records() -> None:
                    )""", (pending_count - _MAX_DURABLE_PENDING,))
 
 
-def _persist_completion(event: Dict[str, Any], result: Dict[str, Any]) -> None:
+def _persist_completion(event: Dict[str, Any], result: Dict[str, Any], *, delivered: bool = False) -> None:
+    """Terminal row for a completion; ``delivered`` when nothing is owed (every child already rode its own row)."""
     now = time.time()
     with _DB_LOCK, _transaction() as conn:
         conn.execute("""UPDATE async_delegations SET state=?, completed_at=?, updated_at=?,
-               event_json=?, result_json=?, delivery_state='pending'
+               event_json=?, result_json=?, delivery_state=?, delivered_at=?
                WHERE delegation_id=?""",
             (event.get("status", "completed"), event.get("completed_at", now), now,
-             json.dumps(event), json.dumps(result), event["delegation_id"]))
+             json.dumps(event), json.dumps(result), "delivered" if delivered else "pending",
+             now if delivered else None, event["delegation_id"]))
+
+
+def _child_rows_glob(batch_id: str) -> str:
+    return f"{batch_id}.[0-9]*"
+
+
+def publish_batch_child(batch_id: str, task_index: int, child: Dict[str, Any]) -> bool:
+    """Deliver ONE finished child of a detached fan-out now, as its own durable completion
+    (``<batch_id>.<task_index>``) on the same rail as a single delegation: claim, ack, restart replay
+    and dedup all key on ``delegation_id``, so no consumer learns a new shape and a fast child is never
+    held behind a slow sibling. The aggregate later skips children with a row here (a failed publish
+    just rides the aggregate). Idempotent; False when the batch is unknown or already published."""
+    with _records_lock:
+        record = dict(_records.get(batch_id) or {})
+    if not record.get("is_batch"):
+        return False
+    now = time.time()
+    goals = record.get("goals") or []
+    child = {**child, "task_index": task_index}
+    evt = {
+        "type": "async_delegation", "delegation_id": f"{batch_id}.{task_index}",
+        "batch_id": batch_id, "task_index": task_index,
+        "session_key": record.get("session_key", ""), "origin_ui_session_id": record.get("origin_ui_session_id", ""),
+        "origin_session_id": record.get("origin_session_id", ""), "parent_session_id": record.get("parent_session_id"),
+        "goal": goals[task_index] if 0 <= task_index < len(goals) else record.get("goal", ""), "goals": goals,
+        "context": record.get("context"), "toolsets": record.get("toolsets"), "role": record.get("role"),
+        "model": child.get("model") or record.get("model"), "status": child.get("status") or "completed",
+        "is_batch": True, "results": [child], "error": child.get("error"),
+        "live_transcripts": [child["live_transcript"]] if child.get("live_transcript") else None,
+        "duration_seconds": child.get("duration_seconds"),
+        "dispatched_at": record.get("dispatched_at") or now, "completed_at": now,
+        **{k: record[k] for k in _ROUTING_KEYS if record.get(k)}}
+    with _DB_LOCK, _transaction() as conn:
+        inserted = conn.execute("""INSERT OR IGNORE INTO async_delegations
+               (delegation_id, origin_session, origin_ui_session_id, parent_session_id, state,
+                dispatched_at, completed_at, updated_at, event_json, result_json,
+                delivery_state, delivery_attempts, origin_session_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)""",
+            (evt["delegation_id"], evt["session_key"], evt["origin_ui_session_id"], evt["parent_session_id"],
+             evt["status"], evt["dispatched_at"], now, now, json.dumps(evt), json.dumps(child),
+             evt["origin_session_id"])).rowcount == 1
+    if inserted:
+        from tools.process_registry import process_registry
+        process_registry.completion_queue.put(evt)
+    return inserted
+
+
+def _published_child_indices(batch_id: str) -> set:
+    """Task indices of ``batch_id`` that already have their own completion row."""
+    with _DB_LOCK, _transaction() as conn:
+        rows = conn.execute("SELECT delegation_id FROM async_delegations WHERE delegation_id GLOB ?",
+                            (_child_rows_glob(batch_id),)).fetchall()
+    return {int(row[0].rsplit(".", 1)[1]) for row in rows}
 
 
 def recover_abandoned_delegations() -> int:
@@ -235,14 +290,20 @@ def recover_abandoned_delegations() -> int:
             if pid and _pid_exists(int(pid)) and (started is None or get_process_start_time(int(pid)) == int(started)):
                 continue
             task = json.loads(task_json or "{}")
+            error = "Delegation owner exited before recording a terminal result; outcome unknown."
+            if task.get("is_batch"):
+                published = conn.execute("SELECT COUNT(*) FROM async_delegations WHERE delegation_id GLOB ?",
+                                         (_child_rows_glob(delegation_id),)).fetchone()[0]
+                if published:
+                    error += (f" {published}/{len(task.get('goals') or [])} child results were recorded "
+                              "before the exit and are delivered separately.")
             event = {
                 "type": "async_delegation", "delegation_id": delegation_id, "session_key": session_key,
                 "origin_ui_session_id": origin_ui, "origin_session_id": origin_sid or "",
                 "parent_session_id": parent_id, "goal": task.get("goal", ""), "goals": task.get("goals"),
                 "context": task.get("context"), "toolsets": task.get("toolsets"), "role": task.get("role"),
                 "model": task.get("model"), "is_batch": bool(task.get("is_batch")),
-                "status": "unknown", "summary": None,
-                "error": "Delegation owner exited before recording a terminal result; outcome unknown.",
+                "status": "unknown", "summary": None, "error": error,
                 "dispatched_at": dispatched_at, "completed_at": now,
                 **{k: task[k] for k in _ROUTING_KEYS if task.get(k)}}
             result = {"status": "unknown", "summary": None, "error": event["error"]}
@@ -647,9 +708,14 @@ def _push_completion_event(record: Dict[str, Any], result: Dict[str, Any], statu
         return
     dispatched_at = record.get("dispatched_at") or time.time()
     completed_at = record.get("completed_at") or time.time()
+    published: set = set()
     if is_batch:
+        # Children already delivered on their own rows are not owed again; the aggregate carries the rest
+        # (and any batch-level error / stall metadata).
+        published = _published_child_indices(str(record.get("delegation_id") or ""))
+        remaining = [r for r in result.get("results") or [] if r.get("task_index") not in published]
         payload = {
-            "is_batch": True, "results": result.get("results") or [],
+            "is_batch": True, "results": remaining,
             "live_transcripts": result.get("live_transcripts"), "error": result.get("error"),
             "total_duration_seconds": result.get("total_duration_seconds")}
     else:
@@ -670,7 +736,10 @@ def _push_completion_event(record: Dict[str, Any], result: Dict[str, Any], statu
         **({} if is_batch else {"exit_reason": result.get("exit_reason")}),
         **{k: record[k] for k in _ROUTING_KEYS if record.get(k)},
         **{k: result[k] for k in _STALL_META_KEYS if k in result}}
-    _persist_completion(evt, result)
+    nothing_owed = is_batch and published and not payload["results"] and not payload["error"]
+    _persist_completion(evt, result, delivered=bool(nothing_owed))
+    if nothing_owed:
+        return
     try:
         process_registry.completion_queue.put(evt)
     except Exception as exc:  # pragma: no cover
