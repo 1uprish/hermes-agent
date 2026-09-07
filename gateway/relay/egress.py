@@ -220,22 +220,6 @@ def _directory_ids(platform_name: str) -> Set[str]:
     return ids
 
 
-def _uses_colon_thread_suffix(platform_name: str) -> bool:
-    """Whether this platform's session ids append ``:thread`` to a chat id.
-
-    Allow-list, not a guess: a platform whose native ids CONTAIN a colon
-    (Matrix `!room:server`, `@user:server`) must never be split, or the split
-    fabricates a chat id. Unknown platforms are treated as un-splittable, which
-    can only ever refuse more, never authorize more.
-    """
-    return str(platform_name or "").strip().lower() in {
-        "slack",
-        "discord",
-        "telegram",
-        "whatsapp",
-    }
-
-
 def _session_ids(platform_name: str) -> Set[str]:
     """Chat ids this gateway has actually held a session in for the platform."""
     try:
@@ -245,20 +229,22 @@ def _session_ids(platform_name: str) -> Set[str]:
     except Exception:  # noqa: BLE001
         return set()
     ids: Set[str] = set()
-    thread_qualified = _uses_colon_thread_suffix(platform_name)
     for entry in entries:
         if isinstance(entry, dict) and entry.get("id"):
             raw = str(entry["id"])
             ids.add(raw)
-            # Session entry ids MAY be thread-qualified ("chat:thread"), and the
-            # destination the connector authorizes is the CHAT — but only on
-            # platforms whose ids do not themselves contain a colon. Splitting
-            # unconditionally INVENTED an attestation: a Matrix room id
-            # `!room:server.org` attested the bare `!room`, a destination no
-            # session ever used. An attestation set must only ever contain ids
-            # the gateway has actually seen.
-            if thread_qualified:
-                ids.add(raw.split(":", 1)[0])
+            # RECOVER THE CHAT FROM THE STRUCTURED FIELD, NEVER BY SPLITTING.
+            # `_session_entry_id` builds the id as f"{chat_id}:{thread_id}"
+            # when a thread exists, and the entry still carries `thread_id`
+            # separately — so the parent is knowable exactly. Splitting on ":"
+            # was a guess that INVENTED attestations: a Matrix room id
+            # `!room:server.org` attested a bare `!room` no session ever used.
+            # An allow-list of "platforms whose ids have no native colon" would
+            # only have narrowed the guess; the structured field removes it.
+            if entry.get("thread_id"):
+                suffix = f":{entry['thread_id']}"
+                if raw.endswith(suffix):
+                    ids.add(raw[: -len(suffix)])
     return ids
 
 

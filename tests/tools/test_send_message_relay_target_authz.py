@@ -536,8 +536,11 @@ def test_session_attestation_does_not_invent_a_matrix_room_prefix(monkeypatch):
     import gateway.relay.egress as eg
 
     monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: {"matrix"})
+    # A Matrix room with NO thread: the colon is part of the address itself.
     monkeypatch.setattr(
-        cd, "_build_from_sessions", lambda p: [{"id": "!owned:server.org"}]
+        cd,
+        "_build_from_sessions",
+        lambda p: [{"id": "!owned:server.org", "thread_id": None}],
     )
 
     # The real session id is still attested...
@@ -547,18 +550,22 @@ def test_session_attestation_does_not_invent_a_matrix_room_prefix(monkeypatch):
 
 
 def test_session_attestation_still_recovers_a_slack_thread_parent(monkeypatch):
-    """Control: the split exists for a reason and must keep working.
+    """Control: thread-parent recovery must keep working.
 
-    Slack session ids are genuinely `chat:thread`, and the connector authorizes
-    the CHAT — so dropping the split entirely would refuse legitimate replies.
+    Slack session ids are genuinely `chat:thread` and the connector authorizes
+    the CHAT, so failing to recover the parent would refuse legitimate replies.
     """
     import gateway.channel_directory as cd
     import gateway.relay as gr
     import gateway.relay.egress as eg
 
     monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: {"slack"})
+    # A genuinely thread-qualified entry carries thread_id separately, which is
+    # how the parent is recovered — no string guessing.
     monkeypatch.setattr(
-        cd, "_build_from_sessions", lambda p: [{"id": "C123:1700000000.1"}]
+        cd,
+        "_build_from_sessions",
+        lambda p: [{"id": "C123:1700000000.1", "thread_id": "1700000000.1"}],
     )
 
     assert eg.authorize_relay_target("slack", "C123") is None
@@ -584,3 +591,25 @@ def test_egress_module_own_import_boundary_fails_closed(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
     with pytest.raises(eg.RelayRouteUnknown):
         eg._relay_fronted()
+
+
+def test_matrix_thread_parent_is_recovered_without_splitting_the_room_id(monkeypatch):
+    """The case the allow-list could never have handled correctly.
+
+    A Matrix room id contains a colon AND the session can be thread-qualified:
+    `!room:server.org:$thread`. Splitting on the FIRST colon yields `!room`
+    (invented); using the structured `thread_id` yields the real room.
+    """
+    import gateway.channel_directory as cd
+    import gateway.relay as gr
+    import gateway.relay.egress as eg
+
+    monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: {"matrix"})
+    monkeypatch.setattr(
+        cd,
+        "_build_from_sessions",
+        lambda p: [{"id": "!room:server.org:$thr", "thread_id": "$thr"}],
+    )
+
+    assert eg.authorize_relay_target("matrix", "!room:server.org") is None
+    assert eg.authorize_relay_target("matrix", "!room") is not None

@@ -312,7 +312,12 @@ def test_thread_qualified_session_id_attests_the_bare_chat():
 
     original = cd._build_from_sessions
     try:
-        cd._build_from_sessions = lambda _p: [{"id": "-100999:77"}]
+        # Real entries carry `thread_id` alongside the composed id
+        # (`_session_entry_id` builds f"{chat_id}:{thread_id}"), and the parent
+        # is now recovered from that field rather than by splitting on ":" —
+        # splitting invented attestations for ids whose colon is part of the
+        # address (Matrix). The PROPERTY below is unchanged.
+        cd._build_from_sessions = lambda _p: [{"id": "-100999:77", "thread_id": "77"}]
         ids = eg._session_ids("telegram")
     finally:
         cd._build_from_sessions = original
