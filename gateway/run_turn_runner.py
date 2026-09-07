@@ -346,11 +346,27 @@ class TurnRunner:
     async def _task_card_send_or_edit_fallback(self, st) -> None:
         ctx = self._ctx
         text = st.fallback_text()
+        from gateway.relay.egress import is_egress_decline
+
+        if getattr(st, "egress_declined", False):
+            return
         if st.fallback_msg_id:
             result = await st.adapter.edit_message(
                 chat_id=ctx.source.chat_id, message_id=st.fallback_msg_id, content=text, metadata=ctx._progress_metadata,
             )
             if getattr(result, "success", False):
+                return
+            # P5(b): R5-4 made a declined native CARD terminal but left this
+            # editable-text fallback: a declined edit fell through to
+            # _send_progress_text and re-sent the same task text to the refused
+            # chat. The decline must set the terminal state here too.
+            if is_egress_decline(getattr(result, "raw_response", None)):
+                logger.warning(
+                    "Task-card fallback edit DECLINED by the connector's egress "
+                    "guard; suppressing progress delivery for the rest of this "
+                    "turn (the destination is not approved)"
+                )
+                st.egress_declined = True
                 return
         result = await self._send_progress_text(st, text)
         if getattr(result, "success", False) and getattr(result, "message_id", None):

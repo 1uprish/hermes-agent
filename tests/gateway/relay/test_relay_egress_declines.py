@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 
 import asyncio
+from types import SimpleNamespace
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -626,6 +627,7 @@ def test_declined_INITIAL_draft_is_not_retried_as_a_plain_send():
     through to `_first_send`. Measured through the real adapter + real
     StreamTransportMixin: ops were ['draft', 'send'].
     """
+    from gateway.platforms.base import SendResult
     from gateway.stream_consumer_transport import StreamTransportMixin
 
     adapter, connector = _code_only_adapter()
@@ -665,3 +667,65 @@ def test_declined_INITIAL_draft_is_not_retried_as_a_plain_send():
     # The turn-final must NOT be replayed into the refused chat.
     assert asyncio.run(consumer._first_send("SECRET", finalize=True)) is False
     assert connector.ops == ["draft"]
+
+
+def test_edit_message_carries_the_structured_decline():
+    """R6-2 root cause: `edit_message` dropped the connector response.
+
+    THREE callers read a bare edit failure as "editing is unavailable" and
+    re-send the content as a NEW message to the same chat (stream edit
+    fallback, queued reconciliation, task-card fallback). One dropped field,
+    three leaks — so the fix belongs here, at the source.
+    """
+    adapter, connector = _code_only_adapter()
+    result = asyncio.run(adapter.edit_message("C1", "m1", "SECRET"))
+
+    assert result.success is False
+    assert connector.ops == ["edit"]
+    assert is_egress_decline(result.raw_response)
+
+
+def test_declined_stream_edit_does_not_send_the_unseen_tail():
+    """R6-2: the stream consumer's edit-failure funnel.
+
+    A refused edit put the consumer into ordinary fallback mode, which delivers
+    the unseen tail as a plain send. Measured: ops were
+    ['edit', 'edit', 'send'].
+    """
+    from gateway.platforms.base import SendResult
+    from gateway.stream_consumer_transport import StreamTransportMixin
+
+    adapter, connector = _code_only_adapter()
+
+    class _Consumer(StreamTransportMixin):
+        def __init__(self):
+            self.adapter = adapter
+            self.chat_id = "C1"
+            self._egress_declined = False
+            self._edit_supported = True
+            self._message_id = "m1"
+            self._last_sent_text = ""
+            self._final_content_delivered = False
+            self.cfg = SimpleNamespace(cursor=None)
+
+        def _visible_prefix(self):
+            return ""
+
+        def _record_turn_final_payload(self, text):
+            return None
+
+        def _enter_fallback_mode(self, *a):
+            return None
+
+    consumer = _Consumer()
+    declined = SendResult(
+        success=False, error="declined", raw_response=dict(CODE_ONLY_DECLINE)
+    )
+    asyncio.run(
+        consumer._on_edit_failure(
+            declined, "tail", finalize=True, is_turn_final=True
+        )
+    )
+
+    # Terminal for the run: the tail must not be re-sent anywhere.
+    assert consumer._egress_declined is True

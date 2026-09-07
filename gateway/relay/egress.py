@@ -183,13 +183,27 @@ def _has_live_native_adapter(platform_name: str) -> bool:
         # delivery actually routed it over the relay — the guard then skipped
         # authorization for a relay send. Two independent routing classifiers
         # are unsafe; this one now answers the same question the router does.
-        try:
-            from gateway.config import load_gateway_config
+        from gateway.config import load_gateway_config
 
+        # NO `except: return True` HERE. I wrote one, and it recreated the very
+        # bypass this method was fixed for: a config read that fails would
+        # declare the platform native while the router — reading the real
+        # config — sends over the relay, so the guard is skipped for a relay
+        # send. A routing question we cannot answer is UNKNOWN, and the caller
+        # turns that into a refusal.
+        try:
             native_config = load_gateway_config().platforms.get(platform)
-        except Exception:  # noqa: BLE001 - no config ⇒ fall back to presence
-            return True
+        except Exception as exc:  # noqa: BLE001 - routing unknown; never assume native
+            raise RelayRouteUnknown(
+                f"native-adapter config lookup failed for {platform_name}: {exc}"
+            ) from exc
         return native_config is None or bool(getattr(native_config, "enabled", True))
+    except RelayRouteUnknown:
+        # Routing is UNKNOWN, not "no native adapter" — must not be flattened
+        # into False here, which would send the caller down the relay-guard
+        # path on a guess. Propagate; authorize_relay_target turns it into a
+        # refusal.
+        raise
     except Exception:  # noqa: BLE001 - no runner (cron/CLI) ⇒ no native adapter
         return False
 

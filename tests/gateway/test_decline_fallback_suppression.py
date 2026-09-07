@@ -269,3 +269,97 @@ def test_ORDINARY_failure_still_falls_back_on_every_later_update():
     asyncio.run(runner._task_card_publish(st))
 
     assert len(adapter.fallbacks) == 2
+
+
+# ── the edit lane (round 6): one dropped raw_response, three leaks ──────────
+
+
+class _EditAdapter:
+    """Records every op; the edit is refused with a code-only decline."""
+
+    def __init__(self) -> None:
+        self.ops: List[str] = []
+
+    @staticmethod
+    def extract_media(text):
+        return [], text
+
+    async def edit_message(self, **k: Any) -> SendResult:
+        self.ops.append("edit")
+        return SendResult(
+            success=False, error="declined", raw_response=CODE_ONLY_DECLINE
+        )
+
+    async def send(self, *a: Any, **k: Any) -> SendResult:
+        self.ops.append("send")
+        return SendResult(success=True, message_id="m1")
+
+
+def test_queued_reconcile_decline_does_not_fall_back_to_a_send():
+    """R6-3: `_deliver_queued_first_response` re-sent the WHOLE response.
+
+    Its reconcile-by-edit falls through to `adapter.send` on any failure, so a
+    refused edit delivered the full text to the refused chat. Measured:
+    [('edit', 'SECRET'), ('send', 'SECRET')].
+    """
+    from gateway.run_notifications import GatewayNotificationsMixin
+
+    adapter = _EditAdapter()
+    mixin = object.__new__(GatewayNotificationsMixin)
+    source = SimpleNamespace(chat_id="C1", platform="discord")
+    consumer = SimpleNamespace(message_id="m0", _turn_split_delivery=False)
+
+    asyncio.run(
+        mixin._deliver_queued_first_response(
+            "SECRET", source, adapter, stream_consumer=consumer, deliver_media=False
+        )
+    )
+
+    assert adapter.ops == ["edit"]
+
+
+def test_queued_reconcile_ORDINARY_edit_failure_still_sends():
+    """Control: a genuinely un-editable message must still be delivered."""
+    from gateway.run_notifications import GatewayNotificationsMixin
+
+    class _Ordinary(_EditAdapter):
+        async def edit_message(self, **k: Any) -> SendResult:
+            self.ops.append("edit")
+            return SendResult(success=False, error="message too old")
+
+    adapter = _Ordinary()
+    mixin = object.__new__(GatewayNotificationsMixin)
+    source = SimpleNamespace(chat_id="C1", platform="discord")
+    consumer = SimpleNamespace(message_id="m0", _turn_split_delivery=False)
+
+    asyncio.run(
+        mixin._deliver_queued_first_response(
+            "SECRET", source, adapter, stream_consumer=consumer, deliver_media=False
+        )
+    )
+
+    assert adapter.ops == ["edit", "send"]
+
+
+def test_task_card_fallback_edit_decline_does_not_send_progress_text():
+    """R6-4: R5-4 covered the native card, not the editable-text fallback."""
+    adapter = _EditAdapter()
+    runner = object.__new__(__import__("gateway.run_turn_runner", fromlist=["x"]).TurnRunner)
+    runner._ctx = SimpleNamespace(
+        source=SimpleNamespace(chat_id="C1", platform="slack"),
+        _progress_metadata={},
+    )
+    sent = []
+    runner._send_progress_text = lambda st, text: sent.append(text)
+    st = SimpleNamespace(
+        fallback_msg_id="m0",
+        fallback_text=lambda: "task text",
+        adapter=adapter,
+        egress_declined=False,
+    )
+
+    asyncio.run(runner._task_card_send_or_edit_fallback(st))
+
+    assert adapter.ops == ["edit"]
+    assert sent == []
+    assert st.egress_declined is True

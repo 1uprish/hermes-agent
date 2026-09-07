@@ -731,3 +731,63 @@ def test_tool_guard_forwards_the_thread_id(monkeypatch):
     monkeypatch.setattr(eg, "authorize_relay_target", fake_authorize)
     smt._authorize_relay_target("discord", "111", "999")
     assert seen["args"] == ("discord", "111", "999")
+
+
+def test_config_read_fault_refuses_rather_than_assuming_native(monkeypatch):
+    """R6-1: my own R5-1 fix reintroduced the bypass it was closing.
+
+    `_has_live_native_adapter` caught a `load_gateway_config()` failure and
+    returned True, so a config fault declared the platform native while the
+    ROUTER — reading the real config — would send over the relay. Routing we
+    cannot determine is UNKNOWN, and unknown must refuse.
+    """
+    from types import SimpleNamespace
+
+    import gateway.config as gc
+    import gateway.relay as gr
+    import gateway.relay.egress as eg
+    import gateway.run as gr_run
+    from gateway.config import Platform
+
+    monkeypatch.setattr(
+        gr_run,
+        "_gateway_runner_ref",
+        lambda: SimpleNamespace(adapters={Platform.DISCORD: object()}),
+        raising=False,
+    )
+    monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: {"discord"})
+    monkeypatch.setattr(eg, "attested_relay_targets", lambda p: set())
+
+    def boom():
+        raise RuntimeError("config unreadable")
+
+    monkeypatch.setattr(gc, "load_gateway_config", boom)
+    assert eg.authorize_relay_target("discord", "999") is not None
+
+
+def test_healthy_config_with_enabled_native_still_bypasses_the_guard(monkeypatch):
+    """Control: the guard must not start refusing native platforms."""
+    from types import SimpleNamespace
+
+    import gateway.config as gc
+    import gateway.relay as gr
+    import gateway.relay.egress as eg
+    import gateway.run as gr_run
+    from gateway.config import Platform
+
+    monkeypatch.setattr(
+        gr_run,
+        "_gateway_runner_ref",
+        lambda: SimpleNamespace(adapters={Platform.DISCORD: object()}),
+        raising=False,
+    )
+    monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: {"discord"})
+    monkeypatch.setattr(eg, "attested_relay_targets", lambda p: set())
+    monkeypatch.setattr(
+        gc,
+        "load_gateway_config",
+        lambda: SimpleNamespace(
+            platforms={Platform.DISCORD: SimpleNamespace(enabled=True)}
+        ),
+    )
+    assert eg.authorize_relay_target("discord", "999") is None

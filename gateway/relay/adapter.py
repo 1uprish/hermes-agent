@@ -1541,9 +1541,15 @@ class RelayAdapter(BasePlatformAdapter):
                 "metadata": self._text_metadata(chat_id, metadata),
             },
         )
+        # P5(b): carry the structured body. THREE separate callers read a bare
+        # edit failure as "editing is unavailable" and re-send the content as a
+        # NEW message to the same chat (stream edit-fallback, queued-response
+        # reconciliation, task-card fallback edit). The edit lane is the ninth
+        # place a decline could be laundered into a different op.
         return SendResult(
             success=bool(result.get("success")), message_id=result.get("message_id") or message_id,
             error=result.get("error"),
+            raw_response=result,
         )
 
     async def delete_message(self, chat_id: str, message_id: str) -> bool:

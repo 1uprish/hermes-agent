@@ -509,6 +509,22 @@ class StreamTransportMixin:
                                ) -> bool:
         """Classify a failed edit: partial overflow, flood backoff, or fallback mode.  Always
         False; the caller's finalize path may still deliver the tail."""
+        # P5(b): an AUTHORIZATION decline is terminal for the run. Every branch
+        # below treats a failed edit as "editing is unavailable" and hands the
+        # unseen tail to the fallback, which SENDS it as a new message to the
+        # chat the connector just refused. Measured: ops were
+        # ['edit', 'edit', 'send'].
+        from gateway.relay.egress import is_egress_decline
+
+        if is_egress_decline(getattr(result, "raw_response", None)):
+            logger.warning(
+                "edit DECLINED by the connector's egress guard; suppressing "
+                "every later send for this run (the destination is not "
+                "approved for this connection)"
+            )
+            self._egress_declined = True
+            self._edit_supported = False
+            return False
         turn_final = finalize and is_turn_final
         if (turn_final and self.cfg.cursor and self._last_sent_text.endswith(self.cfg.cursor)
                 and self._visible_prefix() == text):
