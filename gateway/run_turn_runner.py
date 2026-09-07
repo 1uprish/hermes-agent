@@ -298,6 +298,11 @@ class TurnRunner:
         task_order: List[str] = dataclasses.field(default_factory=list)
         fallback_msg_id: Optional[str] = None
         native_failed: bool = False
+        # TERMINAL authorization refusal, distinct from native_failed: the
+        # connector refused this destination, so no later publication in this
+        # turn may re-deliver the task text through the text fallback. Declared
+        # rather than set dynamically so the state is visible where it lives.
+        egress_declined: bool = False
         anonymous_seq: int = 0
 
         @staticmethod
