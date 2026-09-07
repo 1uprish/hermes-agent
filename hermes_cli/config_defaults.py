@@ -2285,7 +2285,7 @@ DEFAULT_CONFIG = {
         # keepalive thread.
         "keepalive_interval_seconds": 900,
         # Nous free tier: with no other provider configured, Hermes sets up a free Nous identity on
-        # first use (inference on nous/welcome + connectors) and offers `/signin` (terminal:
+        # first use (inference on nous/welcome + connectors) and offers `/login` (terminal:
         # `hermes auth upgrade`) to sign in. false turns the free tier off entirely: nothing is set
         # up and nothing is used.
         "guest": True,
