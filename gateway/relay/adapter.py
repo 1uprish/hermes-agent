@@ -437,6 +437,15 @@ class RelayAdapter(BasePlatformAdapter):
         `_auto_thread_by_chat` maps parent chat -> (thread_id, name) for threads
         the connector created on our behalf, so the parent is found by looking
         the relationship up rather than by parsing an identifier.
+
+        COVERAGE IS DELIBERATELY PARTIAL, and that is safe. Only connector
+        auto-threads are recorded, and the map is capped at 256 entries, so a
+        user-created thread — or one evicted by the cap — will not inherit its
+        parent's latch. The latch is DEFENCE IN DEPTH for threads; the primary
+        control is `authorize_relay_target`, which takes `thread_id` as part of
+        the destination and attests it independently on every send. Inventing
+        parents by parsing identifier text is how the colon-split bug muted
+        unrelated Matrix rooms, so under-covering here is the correct trade.
         """
         try:
             target = str(chat_id)

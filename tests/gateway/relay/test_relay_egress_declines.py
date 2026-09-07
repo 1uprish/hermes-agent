@@ -1098,3 +1098,23 @@ def test_follow_up_carries_the_structured_decline():
 
     assert not result.success
     assert is_egress_decline(result.raw_response)
+
+
+def test_unrecorded_thread_is_not_latched_but_is_still_authorized():
+    """Pins the DELIBERATE limit of the latch's thread coverage.
+
+    Only connector auto-threads are recorded, so a user-created thread does not
+    inherit its parent's latch. That is the correct trade: the alternative is
+    inventing parents by parsing identifier text, which is what muted unrelated
+    Matrix rooms. The primary control is `authorize_relay_target`, which takes
+    thread_id as part of the destination and attests it on every send.
+    """
+    adapter, connector = _latch_adapter({"edit"})
+
+    asyncio.run(adapter.edit_message("C1", "m1", "SECRET"))
+    # No recorded parent/thread relationship for this id.
+    asyncio.run(adapter.send("C1-user-made-thread", "content"))
+
+    # Not suppressed by the latch — and that is asserted, not accidental.
+    assert connector.ops == ["edit", "send"]
+    assert adapter._thread_parent("C1-user-made-thread") is None
