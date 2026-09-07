@@ -86,13 +86,15 @@ def _authorize_relay_target(platform_name: str, chat_id) -> str | None:
         # and returning None here means "authorized". Review probed exactly
         # that (`ImportError.name = "gateway.relay.dependency"`) and got an
         # authorized verdict, so `except ImportError` alone was still fail-open.
-        # An ImportError with NO `name` cannot be attributed to a nested
-        # dependency, and refusing on it would break the legitimate
-        # gateway-absent path (CLI/cron) — an outage in exchange for a fault we
-        # cannot even identify. Only a name that points somewhere ELSE is a
-        # fault.
+        # ABSENCE has one shape and it is checkable: a genuinely missing module
+        # raises ModuleNotFoundError with `.name` set to the module that was not
+        # found (verified: `import gateway.relay.x` -> ModuleNotFoundError,
+        # name="gateway.relay.x"). So a plain ImportError, or a nameless one, is
+        # an unattributable FAULT — never proof that there is no relay here.
+        # I previously admitted the nameless case to protect the CLI/cron path;
+        # that reasoning was wrong, because that path does not produce one.
         _missing = getattr(exc, "name", None)
-        if _missing and _missing not in (
+        if not isinstance(exc, ModuleNotFoundError) or _missing not in (
             "gateway",
             "gateway.relay",
             "gateway.relay.egress",

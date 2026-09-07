@@ -365,7 +365,10 @@ def test_missing_gateway_package_still_allows(relay_env, monkeypatch):
 
     def _no_gateway(name, *a, **k):
         if name.startswith("gateway.relay.egress"):
-            raise ImportError("no gateway package")
+            # The shape real absence takes: ModuleNotFoundError WITH a name.
+            # A bare ImportError is not something a missing module produces,
+            # and treating it as absence was a fail-open (round 4, blocker 1).
+            raise ModuleNotFoundError("no gateway package", name="gateway")
         return real_import(name, *a, **k)
 
     monkeypatch.setattr(builtins, "__import__", _no_gateway)
@@ -469,9 +472,10 @@ def test_nested_dependency_importerror_refuses(monkeypatch):
 
     def fake_import(name, *a, **kw):
         if name == "gateway.relay.egress":
-            err = ImportError("No module named 'gateway.relay.dependency'")
-            err.name = "gateway.relay.dependency"
-            raise err
+            raise ModuleNotFoundError(
+                "No module named 'gateway.relay.dependency'",
+                name="gateway.relay.dependency",
+            )
         return real_import(name, *a, **kw)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
@@ -489,10 +493,94 @@ def test_absent_gateway_module_importerror_still_authorizes(monkeypatch):
 
     def fake_import(name, *a, **kw):
         if name == "gateway.relay.egress":
-            err = ImportError("No module named 'gateway'")
-            err.name = "gateway"
-            raise err
+            raise ModuleNotFoundError("No module named 'gateway'", name="gateway")
         return real_import(name, *a, **kw)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
     assert smt._authorize_relay_target("discord", "999") is None
+
+
+def test_nameless_importerror_refuses(monkeypatch):
+    """Round 4, blocker 1 — a bare ImportError is a FAULT, not absence.
+
+    Genuine absence raises ModuleNotFoundError with `.name` set (verified
+    against the interpreter). A plain ImportError therefore comes from an
+    import hook or a module that failed while initializing, and authorizing on
+    it means any such fault silently disables the boundary.
+    """
+    import builtins
+
+    import tools.send_message_tool as smt
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **kw):
+        if name == "gateway.relay.egress":
+            raise ImportError("something went wrong during init")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    assert smt._authorize_relay_target("discord", "999") is not None
+
+
+def test_session_attestation_does_not_invent_a_matrix_room_prefix(monkeypatch):
+    """Round 4, blocker 2 — the attestation set must not FABRICATE ids.
+
+    `_session_ids` split every id on the first colon to recover "chat" from
+    "chat:thread". Matrix room ids contain a colon natively
+    (`!room:server.org`), so the split attested a bare `!room` that no session
+    ever used — the guard vouching for a destination on its own invention.
+    """
+    import gateway.channel_directory as cd
+    import gateway.relay as gr
+    import gateway.relay.egress as eg
+
+    monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: {"matrix"})
+    monkeypatch.setattr(
+        cd, "_build_from_sessions", lambda p: [{"id": "!owned:server.org"}]
+    )
+
+    # The real session id is still attested...
+    assert eg.authorize_relay_target("matrix", "!owned:server.org") is None
+    # ...but the invented prefix is not.
+    assert eg.authorize_relay_target("matrix", "!owned") is not None
+
+
+def test_session_attestation_still_recovers_a_slack_thread_parent(monkeypatch):
+    """Control: the split exists for a reason and must keep working.
+
+    Slack session ids are genuinely `chat:thread`, and the connector authorizes
+    the CHAT — so dropping the split entirely would refuse legitimate replies.
+    """
+    import gateway.channel_directory as cd
+    import gateway.relay as gr
+    import gateway.relay.egress as eg
+
+    monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: {"slack"})
+    monkeypatch.setattr(
+        cd, "_build_from_sessions", lambda p: [{"id": "C123:1700000000.1"}]
+    )
+
+    assert eg.authorize_relay_target("slack", "C123") is None
+
+
+def test_egress_module_own_import_boundary_fails_closed(monkeypatch):
+    """Round 4, non-blocking finding: `gateway/relay/egress.py` has its OWN
+    import boundary (`_relay_fronted` -> `from gateway.relay import ...`), and
+    the existing nested-ImportError test intercepts the EARLIER import in
+    tools/send_message_tool.py, so this one was never exercised.
+    """
+    import builtins
+
+    import gateway.relay.egress as eg
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **kw):
+        if name == "gateway.relay" and "relay_fronted_platforms" in (kw.get("fromlist") or a[2] if len(a) > 2 else []):
+            raise ModuleNotFoundError("broken dep", name="gateway.relay.broken_dep")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    with pytest.raises(eg.RelayRouteUnknown):
+        eg._relay_fronted()

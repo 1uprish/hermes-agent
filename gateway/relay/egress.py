@@ -111,12 +111,14 @@ def _is_missing_gateway_relay(exc: ImportError) -> bool:
     dependency failing is a broken installation, not "there is no relay here",
     and the two must not share a verdict.
     """
-    name = getattr(exc, "name", None)
-    # No attributable module ⇒ treat as absence: refusing on an unidentifiable
-    # ImportError trades a fault we cannot name for a real outage.
-    if not name:
-        return True
-    return name in ("gateway", "gateway.relay", "gateway.relay.egress")
+    # Absence is ModuleNotFoundError WITH a name; anything else is a fault.
+    if not isinstance(exc, ModuleNotFoundError):
+        return False
+    return getattr(exc, "name", None) in (
+        "gateway",
+        "gateway.relay",
+        "gateway.relay.egress",
+    )
 
 
 def _relay_fronted() -> Set[str]:
@@ -218,6 +220,22 @@ def _directory_ids(platform_name: str) -> Set[str]:
     return ids
 
 
+def _uses_colon_thread_suffix(platform_name: str) -> bool:
+    """Whether this platform's session ids append ``:thread`` to a chat id.
+
+    Allow-list, not a guess: a platform whose native ids CONTAIN a colon
+    (Matrix `!room:server`, `@user:server`) must never be split, or the split
+    fabricates a chat id. Unknown platforms are treated as un-splittable, which
+    can only ever refuse more, never authorize more.
+    """
+    return str(platform_name or "").strip().lower() in {
+        "slack",
+        "discord",
+        "telegram",
+        "whatsapp",
+    }
+
+
 def _session_ids(platform_name: str) -> Set[str]:
     """Chat ids this gateway has actually held a session in for the platform."""
     try:
@@ -227,13 +245,20 @@ def _session_ids(platform_name: str) -> Set[str]:
     except Exception:  # noqa: BLE001
         return set()
     ids: Set[str] = set()
+    thread_qualified = _uses_colon_thread_suffix(platform_name)
     for entry in entries:
         if isinstance(entry, dict) and entry.get("id"):
-            # Session entry ids may be thread-qualified ("chat:thread"); the
-            # destination the connector authorizes is the CHAT, so attest both.
             raw = str(entry["id"])
             ids.add(raw)
-            ids.add(raw.split(":", 1)[0])
+            # Session entry ids MAY be thread-qualified ("chat:thread"), and the
+            # destination the connector authorizes is the CHAT — but only on
+            # platforms whose ids do not themselves contain a colon. Splitting
+            # unconditionally INVENTED an attestation: a Matrix room id
+            # `!room:server.org` attested the bare `!room`, a destination no
+            # session ever used. An attestation set must only ever contain ids
+            # the gateway has actually seen.
+            if thread_qualified:
+                ids.add(raw.split(":", 1)[0])
     return ids
 
 

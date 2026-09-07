@@ -166,3 +166,73 @@ def test_slash_confirm_ORDINARY_failure_returns_the_text_fallback():
     reply = _run_confirm(_busy(adapter))
 
     assert reply == "really wipe?"
+
+
+# ── task-card progress ──────────────────────────────────────────────────────
+#
+# Round 4 finding: the round-3 fix added the production branch AND a test, but
+# the test stopped at RelayAdapter — it proved raw_response is carried and
+# never called the caller that owns the security property. Deleting the real
+# branch left 30 tests green. Same lesson as #7, one lane over: a component in
+# the path proves nothing until a case drives THE CALLER.
+
+
+class _CardAdapter:
+    def __init__(self, progress_result: SendResult) -> None:
+        self._progress_result = progress_result
+        self.fallbacks: List[str] = []
+
+    async def send_native_task_card_progress(self, **k: Any) -> SendResult:
+        return self._progress_result
+
+
+def _card_runner(adapter: _CardAdapter):
+    from gateway.run_turn_runner import TurnRunner
+
+    runner = object.__new__(TurnRunner)
+    runner._ctx = SimpleNamespace(
+        source=SimpleNamespace(chat_id="C1", platform="slack"),
+        _progress_reply_to=None,
+        _progress_metadata={},
+    )
+
+    async def _fallback(st):
+        adapter.fallbacks.append("fallback")
+
+    runner._task_card_send_or_edit_fallback = _fallback
+    return runner
+
+
+def _card_state(adapter: _CardAdapter):
+    return SimpleNamespace(
+        tasks=[{"text": "step"}],
+        native_failed=False,
+        visible_tasks=lambda: [{"text": "step"}],
+        fallback_text=lambda: "step",
+        adapter=adapter,
+    )
+
+
+def test_declined_task_card_progress_does_not_send_the_text_fallback():
+    adapter = _CardAdapter(
+        SendResult(success=False, error="declined", raw_response=CODE_ONLY_DECLINE)
+    )
+    runner = _card_runner(adapter)
+    st = _card_state(adapter)
+
+    asyncio.run(runner._task_card_publish(st))
+
+    assert adapter.fallbacks == []
+    assert st.native_failed is True
+
+
+def test_ORDINARY_task_card_failure_still_sends_the_text_fallback():
+    """Control: a genuinely broken card lane must still reach the user."""
+    adapter = _CardAdapter(SendResult(success=False, error="slack 500"))
+    runner = _card_runner(adapter)
+    st = _card_state(adapter)
+
+    asyncio.run(runner._task_card_publish(st))
+
+    assert adapter.fallbacks == ["fallback"]
+    assert st.native_failed is True
