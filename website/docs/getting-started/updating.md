@@ -40,6 +40,8 @@ Desktop-driven updates also mirror output to `logs/update.log` under the active 
 
 If the maintained updater script is missing (for example after antivirus quarantine), the legacy update forwarder fails instead of reporting a successful hand-off. Repair the installation and review the security software's quarantine report before retrying; do not disable antivirus protection. The maintained updater checks that the updated Python runtime can import the CLI and that the packaged Desktop has a valid Windows executable, its app archive and renderer entry files, and a current build stamp before reporting success. Missing prerequisites are reported before waiting for Desktop shutdown; dependency repair is still allowed to run as part of the update.
 
+On Windows, a Desktop reopened during packaging is stopped again immediately before the staged build is promoted. This cleanup is restricted to executables inside that checkout's Desktop release tree; unrelated installations are not stopped. If promotion still fails, the previous build remains in place.
+
 ### Updating against a non-default branch: `--branch`
 
 By default `hermes update` tracks `origin/main`. Pass `--branch <name>` to update against a different branch — useful for QA channels, feature branches, or release-candidate testing:
