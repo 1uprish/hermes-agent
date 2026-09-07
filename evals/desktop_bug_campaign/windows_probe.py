@@ -101,9 +101,25 @@ def powershell_missing():
     record('missing_python', exit=p.returncode, receipt=json.loads(receipt.read_text(encoding='utf-8-sig')) if receipt.exists() else None)
 
 
+def false_success():
+    # Controlled update child, not the real updater: isolates the PowerShell receipt boundary.
+    shell = str(Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe')
+    install = HOME / 'false-success/repo'
+    install.mkdir(parents=True)
+    subprocess.run([sys.executable, '-m', 'venv', str(install / 'venv')], stdin=subprocess.DEVNULL, check=True)
+    package = install / 'hermes_cli'
+    package.mkdir()
+    (package / '__init__.py').touch()
+    (package / 'main.py').write_text("import sys\nfrom pathlib import Path\nif '--help' in sys.argv: print('--keep-stash')\nelif 'update' in sys.argv:\n print('Controlled child completed; no desktop artifact produced', flush=True)\n Path(__file__).unlink()\n", encoding='utf-8')
+    p = subprocess.run([shell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(ROOT / 'scripts/desktop-update/windows.ps1'), '-InstallRoot', str(install), '-NoUi'], cwd=install, stdin=subprocess.DEVNULL, capture_output=True, timeout=90)
+    (OUT / 'false-success.log').write_bytes(p.stdout + p.stderr)
+    receipt = install.parent / '.hermes-update-result.json'
+    record('false_success_boundary', fidelity='real maintained PowerShell script; controlled zero-exit update child deletes its module; not full update', exit=p.returncode, module_exists=(package / 'main.py').exists(), desktop_exists=(install / 'apps/desktop/release').exists(), receipt=json.loads(receipt.read_text(encoding='utf-8-sig')) if receipt.exists() else None)
+
+
 if sys.platform != 'win32':
     raise SystemExit('Native Windows required')
-for probe in [progress, promotion, powershell_missing]:
+for probe in [progress, promotion, powershell_missing, false_success]:
     try:
         probe()
     except Exception as exc:
