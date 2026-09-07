@@ -346,7 +346,7 @@ class TurnRunner:
     async def _task_card_send_or_edit_fallback(self, st) -> None:
         ctx = self._ctx
         text = st.fallback_text()
-        from gateway.relay.egress import is_egress_decline
+        from gateway.relay.egress import declined_send
 
         if getattr(st, "egress_declined", False):
             return
@@ -360,7 +360,7 @@ class TurnRunner:
             # editable-text fallback: a declined edit fell through to
             # _send_progress_text and re-sent the same task text to the refused
             # chat. The decline must set the terminal state here too.
-            if is_egress_decline(getattr(result, "raw_response", None)):
+            if declined_send(result):
                 logger.warning(
                     "Task-card fallback edit DECLINED by the connector's egress "
                     "guard; suppressing progress delivery for the rest of this "
@@ -391,9 +391,9 @@ class TurnRunner:
             # fallback below sends the same task text to the same chat, which
             # turns a refused card into delivered plain text. Stop the lane
             # without re-delivering; the refusal is already logged.
-            from gateway.relay.egress import is_egress_decline
+            from gateway.relay.egress import declined_send
 
-            if is_egress_decline(getattr(result, "raw_response", None)):
+            if declined_send(result):
                 # TERMINAL, and stored SEPARATELY from native_failed. Reusing
                 # native_failed suppressed exactly ONE update: the next progress
                 # event skipped this branch (the lane is already "failed") and

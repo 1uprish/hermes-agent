@@ -1164,19 +1164,10 @@ class GatewayBusySessionMixin:
                 # a code-only decline has no marker colon in its rendered text,
                 # and an ambiguous result must not be treated as a definite
                 # refusal.
-                from gateway.relay.egress import is_egress_decline
+                from gateway.relay.egress import declined_send
 
-                _raw = getattr(button_result, "raw_response", None)
                 _confirm_err = getattr(button_result, "error", None)
-                _declined = (
-                    is_egress_decline(_raw)
-                    if isinstance(_raw, dict)
-                    else bool(
-                        _confirm_err
-                        and is_egress_decline({"success": False, "error": _confirm_err})
-                    )
-                )
-                if _declined:
+                if declined_send(button_result):
                     logger.warning(
                         "slash-confirm DECLINED by the connector's egress "
                         "guard for %s on %s — suppressing the text fallback: %s",

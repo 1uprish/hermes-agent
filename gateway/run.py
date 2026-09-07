@@ -744,26 +744,24 @@ def _approval_send_outcome(future, timeout: float) -> str:
     #   * `ambiguous: True` (lost ack, mid-write drop) was flattened into a
     #     DEFINITE failure, which re-sends a card that may well have posted.
     # I fixed the text-marker path and tested only the text-marker path.
-    from gateway.relay.egress import is_egress_decline
+    from gateway.relay.egress import declined_send
 
     _raw = getattr(result, "raw_response", None)
-    if isinstance(_raw, dict):
-        if _raw.get("ambiguous"):
-            # The frame may have been applied. Same physics as a scheduling
-            # timeout: possibly-delivered, so never re-send.
-            logger.warning("Prompt send AMBIGUOUS (lost ack): %s", _raw.get("error"))
-            return "ambiguous"
-        if is_egress_decline(_raw):
-            logger.warning(
-                "Prompt send DECLINED by connector egress guard: %s",
-                getattr(result, "error", None),
-            )
-            return "declined"
-    _err = getattr(result, "error", None)
-    if _err and is_egress_decline({"success": False, "error": _err}):
-        # No structured response (older connector): fall back to the uniform
-        # decline sentence, which is the documented wire contract.
-        logger.warning("Prompt send DECLINED by connector egress guard: %s", _err)
+    if isinstance(_raw, dict) and _raw.get("ambiguous"):
+        # The frame may have been applied. Same physics as a scheduling
+        # timeout: possibly-delivered, so never re-send. Checked BEFORE the
+        # decline classification because an ambiguous result is a transport
+        # outcome, not an authorization one, and this lane has three verdicts
+        # rather than the boolean the shared helper answers.
+        logger.warning("Prompt send AMBIGUOUS (lost ack): %s", _raw.get("error"))
+        return "ambiguous"
+    if declined_send(result):
+        # Both shapes, one classifier: a structured body, or the uniform
+        # decline sentence from an older connector.
+        logger.warning(
+            "Prompt send DECLINED by connector egress guard: %s",
+            getattr(result, "error", None),
+        )
         return "declined"
     logger.warning("Prompt send failed: %s", getattr(result, "error", None) or "unknown error")
     return "failed"

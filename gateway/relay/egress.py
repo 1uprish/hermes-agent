@@ -64,6 +64,37 @@ def is_egress_decline(result: Any) -> bool:
     return EGRESS_DECLINE_MARKER in str(result.get("error") or "").lower()
 
 
+def declined_send(result: Any) -> bool:
+    """True when a SEND RESULT object carries a destination refusal.
+
+    ``is_egress_decline`` classifies a raw connector DICT. Callers hold a
+    ``SendResult``, and eight call sites each hand-rolled the unwrapping — with
+    two different answers. Six checked only ``raw_response``; two also checked
+    the error text. That disagreement was a real defect, not mere repetition:
+    a connector that answers with the uniform decline SENTENCE and no
+    structured code (the documented contract for older connectors, see
+    ``_approval_send_outcome``) was classified as an ordinary failure by those
+    six, so the lane treated a refusal as "editing unavailable" and retried.
+
+    Measured: text-only decline -> six-site check False, two-site check True.
+
+    Both shapes are authoritative, so both are checked here, once:
+
+    * ``raw_response`` when the connector sent a structured body,
+    * otherwise the error text against the uniform decline marker.
+
+    The latch in ``RelayAdapter`` already catches both (it classifies the
+    transport dict directly), which is why the inconsistency cost verdicts and
+    futile retries rather than leaked content. This helper makes the gateway
+    lanes agree with the wire.
+    """
+    raw = getattr(result, "raw_response", None)
+    if isinstance(raw, dict):
+        return is_egress_decline(raw)
+    error = getattr(result, "error", None)
+    return bool(error and is_egress_decline({"success": False, "error": error}))
+
+
 def decline_error(result: Any) -> str:
     """The connector's decline text, verbatim, for surfacing to the caller.
 

@@ -178,9 +178,9 @@ class StreamTransportMixin:
             # merely "drafts are unusable". Disabling drafts alone routes the
             # turn-final to _first_send — a plain send into the chat the
             # connector just refused. Verified: ops were ['draft', 'send'].
-            from gateway.relay.egress import is_egress_decline
+            from gateway.relay.egress import declined_send
 
-            if is_egress_decline(getattr(result, "raw_response", None)):
+            if declined_send(result):
                 logger.warning(
                     "send_draft DECLINED by the connector's egress guard; "
                     "suppressing every later send for this run (the destination "
@@ -514,9 +514,9 @@ class StreamTransportMixin:
         # unseen tail to the fallback, which SENDS it as a new message to the
         # chat the connector just refused. Measured: ops were
         # ['edit', 'edit', 'send'].
-        from gateway.relay.egress import is_egress_decline
+        from gateway.relay.egress import declined_send
 
-        if is_egress_decline(getattr(result, "raw_response", None)):
+        if declined_send(result):
             logger.warning(
                 "edit DECLINED by the connector's egress guard; suppressing "
                 "every later send for this run (the destination is not "

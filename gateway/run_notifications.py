@@ -332,9 +332,9 @@ class GatewayNotificationsMixin:
                             # P5(b): a DECLINE is not "editing unavailable". The
                             # send below re-delivers the whole response to the
                             # chat the connector just refused.
-                            from gateway.relay.egress import is_egress_decline
+                            from gateway.relay.egress import declined_send
 
-                            if is_egress_decline(getattr(_edit_res, "raw_response", None)):
+                            if declined_send(_edit_res):
                                 logger.warning(
                                     "Queued-lane reconcile edit DECLINED by the "
                                     "connector's egress guard; not falling back "

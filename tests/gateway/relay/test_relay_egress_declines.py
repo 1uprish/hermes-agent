@@ -1118,3 +1118,93 @@ def test_unrecorded_thread_is_not_latched_but_is_still_authorized():
     # Not suppressed by the latch — and that is asserted, not accidental.
     assert connector.ops == ["edit", "send"]
     assert adapter._thread_parent("C1-user-made-thread") is None
+
+
+# ── one classifier for SendResult declines ─────────────────────────────────
+
+
+def test_declined_send_accepts_both_wire_shapes():
+    """Eight gateway lanes hand-rolled this unwrapping with TWO answers.
+
+    Six checked only `raw_response`; two also checked the error text. A
+    connector answering with the uniform decline SENTENCE and no structured
+    code — the documented contract for older connectors — was therefore
+    classified as an ordinary failure by those six, so the lane treated a
+    refusal as "editing unavailable" and retried through another op.
+
+    Measured before the fix: text-only decline -> six-site False, two-site True.
+    """
+    from gateway.platforms.base import SendResult
+    from gateway.relay.egress import declined_send
+
+    # Structured body.
+    assert declined_send(
+        SendResult(success=False, error="x", raw_response=dict(CODE_ONLY_DECLINE))
+    )
+    # Uniform decline sentence only — the shape six lanes used to miss.
+    assert declined_send(
+        SendResult(success=False, error="egress declined: destination not approved")
+    )
+    # AMBIGUOUS is a transport outcome, never an authorization one: the frame
+    # may have been applied, so it must not be classified as a refusal.
+    assert not declined_send(
+        SendResult(
+            success=False,
+            error="lost ack",
+            raw_response={"success": False, "ambiguous": True, "code": EGRESS_DECLINE_CODE},
+        )
+    )
+    # Ordinary failures stay ordinary — over-refusal is the larger risk now.
+    assert not declined_send(SendResult(success=False, error="rate limited"))
+    assert not declined_send(SendResult(success=True, message_id="m1"))
+
+
+def test_declined_draft_frame_is_terminal_for_the_run():
+    """Covers `_send_draft_frame`, whose decline check SURVIVED mutation.
+
+    A declined draft frame must set `_egress_declined`, not merely disable
+    drafts: disabling drafts alone routes the turn-final to `_first_send`,
+    which is a plain send into the chat the connector just refused.
+
+    Also asserts the text-only wire shape here specifically — this lane is one
+    of the six that used to read `raw_response` only, so before the shared
+    classifier it missed exactly this reply.
+    """
+    from gateway.platforms.base import SendResult
+    from gateway.stream_consumer_transport import StreamTransportMixin
+
+    class _Adapter:
+        def __init__(self, result):
+            self._result = result
+            self.draft_calls = 0
+
+        async def send_draft(self, **kwargs):
+            self.draft_calls += 1
+            return self._result
+
+    class _Consumer(StreamTransportMixin):
+        def __init__(self, adapter):
+            self.adapter = adapter
+            self.chat_id = "C1"
+            self._draft_id = "d1"
+            self._use_draft_streaming = True
+            self._draft_failures = 0
+            self._last_sent_text = None
+            self._egress_declined = False
+
+        def _draft_metadata(self):
+            return {}
+
+    # Text-only decline: no structured body at all.
+    adapter = _Adapter(SendResult(success=False, error="egress declined: not approved"))
+    consumer = _Consumer(adapter)
+    assert asyncio.run(consumer._send_draft_frame("partial")) is False
+    assert consumer._egress_declined is True
+
+    # CONTROL: an ordinary draft failure disables drafts WITHOUT going terminal,
+    # otherwise this fix silently becomes "one flaky frame mutes the chat".
+    adapter2 = _Adapter(SendResult(success=False, error="rate limited"))
+    consumer2 = _Consumer(adapter2)
+    assert asyncio.run(consumer2._send_draft_frame("partial")) is False
+    assert consumer2._egress_declined is False
+    assert consumer2._use_draft_streaming is False
