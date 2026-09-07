@@ -278,7 +278,7 @@ export const creamTheme: DashboardTheme = {
     page: { background: "#fdfcf8" },
   },
   customCSS: `
-    .font-mondwest, .font-expanded { font-family: var(--font-sans) !important; }
+    .font-mondwest, .font-expanded { font-family: var(--theme-font-sans) !important; }
     .font-compressed { font-family: "Arial Narrow", Arial, sans-serif !important; }
   `,
 };
