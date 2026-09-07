@@ -616,3 +616,52 @@ def test_declined_task_card_progress_carries_the_decline_to_its_caller():
     assert result.success is False
     assert connector.ops == ["task_card"]
     assert is_egress_decline(result.raw_response)
+
+
+def test_declined_INITIAL_draft_is_not_retried_as_a_plain_send():
+    """R5-3: the round-3 fix covered a declined SEAL, not a declined OPEN.
+
+    `send_draft` logged the decline but returned a bare failure, so the stream
+    consumer read it as "draft transport unusable", disabled drafts, and fell
+    through to `_first_send`. Measured through the real adapter + real
+    StreamTransportMixin: ops were ['draft', 'send'].
+    """
+    from gateway.stream_consumer_transport import StreamTransportMixin
+
+    adapter, connector = _code_only_adapter()
+
+    class _Consumer(StreamTransportMixin):
+        def __init__(self):
+            self.adapter = adapter
+            self.chat_id = "C1"
+            self._draft_id = 1
+            self._use_draft_streaming = True
+            self._draft_failures = 0
+            self._initial_reply_to_id = None
+            self._already_sent = False
+            self._last_sent_text = ""
+            self._edit_supported = True
+
+        def _draft_metadata(self):
+            return {}
+
+        def _metadata_for_send(self, **k):
+            return {}
+
+        def _visible_prefix(self):
+            return ""
+
+        def _enter_fallback_mode(self, *a):
+            return None
+
+        def _adopt_message_id(self, mid):
+            return None
+
+        def _track_preview_ids_from_result(self, r):
+            return None
+
+    consumer = _Consumer()
+    assert asyncio.run(consumer._send_draft_frame("partial")) is False
+    # The turn-final must NOT be replayed into the refused chat.
+    assert asyncio.run(consumer._first_send("SECRET", finalize=True)) is False
+    assert connector.ops == ["draft"]

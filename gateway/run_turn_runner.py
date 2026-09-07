@@ -355,6 +355,10 @@ class TurnRunner:
         ctx = self._ctx
         if not st.tasks:
             return
+        if getattr(st, "egress_declined", False):
+            # The connector refused this destination earlier in the turn; every
+            # later publication would re-deliver the same task text there.
+            return
         if not st.native_failed:
             result = await st.adapter.send_native_task_card_progress(
                 chat_id=ctx.source.chat_id, tasks=st.visible_tasks(), title="Hermes is working",
@@ -369,11 +373,17 @@ class TurnRunner:
             from gateway.relay.egress import is_egress_decline
 
             if is_egress_decline(getattr(result, "raw_response", None)):
+                # TERMINAL, and stored SEPARATELY from native_failed. Reusing
+                # native_failed suppressed exactly ONE update: the next progress
+                # event skipped this branch (the lane is already "failed") and
+                # went straight to the text fallback. A refusal does not expire
+                # after one tick.
+                st.egress_declined = True
                 st.native_failed = True
                 logger.warning(
                     "Slack native task-card progress DECLINED by the connector's "
-                    "egress guard — suppressing the text fallback (the "
-                    "destination is not approved for this connection)"
+                    "egress guard — suppressing the text fallback for the rest "
+                    "of this turn (the destination is not approved)"
                 )
                 return
             st.native_failed = True

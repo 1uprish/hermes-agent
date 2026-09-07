@@ -492,7 +492,18 @@ class RelayAdapter(BasePlatformAdapter):
         # seal on a stream the connector just declared unusable.
         if self._open_draft_by_chat.get(chat_key) == draft_id:
             self._open_draft_by_chat.pop(chat_key, None)
-        return SendResult(success=False, error=str(result.get("error") or "draft failed"))
+        # P5(b): carry the structured body. The stream consumer reads a bare
+        # draft failure as "draft transport unusable", disables drafts, and
+        # falls through to a plain send — a second op against the chat the
+        # connector just refused. Verified end to end with the real
+        # GatewayStreamConsumer: ops were ['draft', 'send'].
+        if is_egress_decline(result):
+            log_decline("draft", chat_id, result)
+        return SendResult(
+            success=False,
+            error=str(result.get("error") or decline_error(result) or "draft failed"),
+            raw_response=result,
+        )
 
     async def _seal_open_draft(
         self,

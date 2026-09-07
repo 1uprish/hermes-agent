@@ -613,3 +613,121 @@ def test_matrix_thread_parent_is_recovered_without_splitting_the_room_id(monkeyp
 
     assert eg.authorize_relay_target("matrix", "!room:server.org") is None
     assert eg.authorize_relay_target("matrix", "!room") is not None
+
+
+# ── round 5 ────────────────────────────────────────────────────────────────
+
+
+def test_disabled_native_adapter_is_not_treated_as_native(monkeypatch):
+    """R5-1: the guard and the delivery router must not disagree about routing.
+
+    `resolve_delivery_transport` ignores a native adapter whose config is
+    DISABLED and routes over Relay. `_has_live_native_adapter` treated mere
+    presence in the adapter map as native, so the guard skipped authorization
+    for a send that actually went over the relay.
+    """
+    from types import SimpleNamespace
+
+    import gateway.relay.egress as eg
+    from gateway.config import Platform
+
+    monkeypatch.setattr(
+        eg,
+        "_gateway_runner_ref",
+        lambda: SimpleNamespace(adapters={Platform.DISCORD: object()}),
+        raising=False,
+    )
+    import gateway.run as gr_run
+
+    monkeypatch.setattr(gr_run, "_gateway_runner_ref", eg._gateway_runner_ref, raising=False)
+    monkeypatch.setattr(
+        eg,
+        "load_gateway_config",
+        lambda: SimpleNamespace(
+            platforms={Platform.DISCORD: SimpleNamespace(enabled=False)}
+        ),
+        raising=False,
+    )
+    import gateway.config as gc
+
+    monkeypatch.setattr(
+        gc,
+        "load_gateway_config",
+        lambda: SimpleNamespace(
+            platforms={Platform.DISCORD: SimpleNamespace(enabled=False)}
+        ),
+    )
+    assert eg._has_live_native_adapter("discord") is False
+
+
+def test_enabled_native_adapter_is_still_native(monkeypatch):
+    """Control: an ENABLED native adapter must keep bypassing the relay guard."""
+    from types import SimpleNamespace
+
+    import gateway.config as gc
+    import gateway.relay.egress as eg
+    import gateway.run as gr_run
+    from gateway.config import Platform
+
+    ref = lambda: SimpleNamespace(adapters={Platform.DISCORD: object()})  # noqa: E731
+    monkeypatch.setattr(gr_run, "_gateway_runner_ref", ref, raising=False)
+    monkeypatch.setattr(
+        gc,
+        "load_gateway_config",
+        lambda: SimpleNamespace(
+            platforms={Platform.DISCORD: SimpleNamespace(enabled=True)}
+        ),
+    )
+    assert eg._has_live_native_adapter("discord") is True
+
+
+def test_arbitrary_thread_under_an_attested_parent_is_refused(relay_env, monkeypatch):
+    """R5-2: on Discord the THREAD is the REST destination.
+
+    `POST /channels/{thread_id}/messages` — so an attested parent channel must
+    not vouch for a caller-supplied thread the gateway has never seen.
+    """
+    import gateway.relay as gr
+    import gateway.relay.egress as eg
+
+    monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: {"discord"})
+    monkeypatch.setattr(eg, "attested_relay_targets", lambda p: {"111"})
+    assert eg.authorize_relay_target("discord", "111", "999") is not None
+
+
+@pytest.mark.parametrize("attested", [{"111", "999"}, {"111", "111:999"}])
+def test_attested_thread_is_allowed(relay_env, monkeypatch, attested):
+    """Control: a thread the gateway HAS a provenance for must still send.
+
+    Both shapes count — the bare thread id, and the `chat:thread` form a
+    session origin produces.
+    """
+    import gateway.relay as gr
+    import gateway.relay.egress as eg
+
+    monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: {"discord"})
+    monkeypatch.setattr(eg, "attested_relay_targets", lambda p: attested)
+    assert eg.authorize_relay_target("discord", "111", "999") is None
+
+
+def test_tool_guard_forwards_the_thread_id(monkeypatch):
+    """The wrapper must PASS thread_id, not just accept it.
+
+    Mutating `_authorize_relay_target` to drop the argument survived every
+    other test here — they all call `authorize_relay_target` directly, so
+    nothing observed what the tool wrapper forwards. Same gap as the caller
+    findings: testing the callee never proves the caller uses it.
+    """
+    import tools.send_message_tool as smt
+
+    seen = {}
+
+    def fake_authorize(platform_name, chat_id, thread_id=None):
+        seen["args"] = (platform_name, chat_id, thread_id)
+        return None
+
+    import gateway.relay.egress as eg
+
+    monkeypatch.setattr(eg, "authorize_relay_target", fake_authorize)
+    smt._authorize_relay_target("discord", "111", "999")
+    assert seen["args"] == ("discord", "111", "999")

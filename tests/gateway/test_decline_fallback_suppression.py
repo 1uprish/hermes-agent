@@ -236,3 +236,36 @@ def test_ORDINARY_task_card_failure_still_sends_the_text_fallback():
 
     assert adapter.fallbacks == ["fallback"]
     assert st.native_failed is True
+
+
+def test_task_card_decline_suppression_persists_across_updates():
+    """R5-4: my round-4 fix suppressed exactly ONE update.
+
+    It set `native_failed`, which the entry gate already uses for an ordinary
+    broken lane — so the NEXT progress event skipped the decline branch and
+    went straight to the text fallback. Measured: [] then ['send'].
+    A refusal does not expire after one tick.
+    """
+    adapter = _CardAdapter(
+        SendResult(success=False, error="declined", raw_response=CODE_ONLY_DECLINE)
+    )
+    runner = _card_runner(adapter)
+    st = _card_state(adapter)
+
+    asyncio.run(runner._task_card_publish(st))
+    asyncio.run(runner._task_card_publish(st))
+    asyncio.run(runner._task_card_publish(st))
+
+    assert adapter.fallbacks == []
+
+
+def test_ORDINARY_failure_still_falls_back_on_every_later_update():
+    """Control: a broken card lane must keep reaching the user each update."""
+    adapter = _CardAdapter(SendResult(success=False, error="slack 500"))
+    runner = _card_runner(adapter)
+    st = _card_state(adapter)
+
+    asyncio.run(runner._task_card_publish(st))
+    asyncio.run(runner._task_card_publish(st))
+
+    assert len(adapter.fallbacks) == 2

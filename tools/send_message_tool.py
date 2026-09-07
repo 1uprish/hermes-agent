@@ -60,7 +60,7 @@ def _handle_list():
         return json.dumps(_error(f"Failed to load channel directory: {e}"))
 
 
-def _authorize_relay_target(platform_name: str, chat_id) -> str | None:
+def _authorize_relay_target(platform_name: str, chat_id, thread_id=None) -> str | None:
     """Relay egress-authorization guard (P5a); None when the send may proceed.
 
     Thin delegate to ``gateway.relay.egress`` so the tool keeps working in
@@ -122,7 +122,7 @@ def _authorize_relay_target(platform_name: str, chat_id) -> str | None:
         )
 
     try:
-        return authorize_relay_target(platform_name, chat_id)
+        return authorize_relay_target(platform_name, chat_id, thread_id)
     except Exception:  # noqa: BLE001 - the guard faulted; FAIL CLOSED
         logger.exception(
             "relay target authorization FAILED for %s — refusing the send",
@@ -162,7 +162,7 @@ def _handle_react(args, remove=False):
     # P5(a): same egress-authorization floor as the send path — a reaction is
     # an outbound act against a named destination, so an unattested relay
     # target must be refused here too, not just on `send`.
-    _relay_denial = _authorize_relay_target(platform_name, chat_id)
+    _relay_denial = _authorize_relay_target(platform_name, chat_id, _thread_id)
     if _relay_denial:
         return tool_error(_relay_denial)
 
@@ -227,7 +227,9 @@ def _handle_send(args):
     # that caused the outage it was meant to prevent. Pinned by
     # test_slack_user_targets_resolve_then_authorize; moving this call back up
     # turns those cases red.
-    _relay_denial = _authorize_relay_target(platform_name, chat_id)
+    # thread_id is part of the DESTINATION: on Discord the thread is the literal
+    # REST target, so an attested parent must not vouch for an arbitrary thread.
+    _relay_denial = _authorize_relay_target(platform_name, chat_id, thread_id)
     if _relay_denial:
         return tool_error(_relay_denial)
 

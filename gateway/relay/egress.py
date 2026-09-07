@@ -174,7 +174,22 @@ def _has_live_native_adapter(platform_name: str) -> bool:
         if runner is None:
             return False
         adapters = getattr(runner, "adapters", None) or {}
-        return adapters.get(Platform(platform_name)) is not None
+        platform = Platform(platform_name)
+        if adapters.get(platform) is None:
+            return False
+        # MATCH `resolve_delivery_transport` EXACTLY. A native adapter that is
+        # explicitly DISABLED never shadows Relay there, so treating mere
+        # presence as "native" made the guard believe a send was native while
+        # delivery actually routed it over the relay — the guard then skipped
+        # authorization for a relay send. Two independent routing classifiers
+        # are unsafe; this one now answers the same question the router does.
+        try:
+            from gateway.config import load_gateway_config
+
+            native_config = load_gateway_config().platforms.get(platform)
+        except Exception:  # noqa: BLE001 - no config ⇒ fall back to presence
+            return True
+        return native_config is None or bool(getattr(native_config, "enabled", True))
     except Exception:  # noqa: BLE001 - no runner (cron/CLI) ⇒ no native adapter
         return False
 
@@ -292,11 +307,20 @@ def _is_unresolved_handle(platform_name: str, target: str) -> bool:
     return platform_name == "telegram" and target.startswith("@")
 
 
-def authorize_relay_target(platform_name: str, chat_id: Any) -> Optional[str]:
+def authorize_relay_target(
+    platform_name: str, chat_id: Any, thread_id: Any = None
+) -> Optional[str]:
     """Return an error string when this relay destination may not be named.
 
     ``None`` means the send may proceed. Non-relay platforms are never
     restricted here — their own adapters own their authorization.
+
+    THREAD IDS ARE PART OF THE DESTINATION, not a formatting detail. On Discord
+    the thread is the literal REST target
+    (``POST /channels/{thread_id}/messages``), so authorizing only the parent
+    let an attested channel vouch for an arbitrary caller-supplied thread. The
+    thread must therefore carry its own attestation — a session in the parent
+    is not evidence of a session in the thread.
     """
     try:
         routed = relay_routed_platform(platform_name)
@@ -320,7 +344,21 @@ def authorize_relay_target(platform_name: str, chat_id: Any) -> Optional[str]:
     if not target:
         return None
     name = str(platform_name).strip().lower()
-    if target in attested_relay_targets(name):
+    attested = attested_relay_targets(name)
+    if target in attested:
+        # The CHAT is attested. If the caller also named a thread, that thread
+        # is the real destination on thread-addressed platforms, so it needs an
+        # attestation of its own.
+        thread = str(thread_id or "").strip()
+        if thread and thread != target:
+            if thread in attested or f"{target}:{thread}" in attested:
+                return None
+            return (
+                f"Refusing to send to relay target '{name}:{target}:{thread}': "
+                f"the parent chat is attested but this gateway has no record of "
+                f"the thread, and on this platform the thread IS the delivery "
+                f"destination."
+            )
         return None
     # ── Telegram `@username`: authorized by the CONNECTOR, not here ─────────
     #
