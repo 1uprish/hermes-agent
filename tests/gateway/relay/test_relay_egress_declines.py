@@ -730,6 +730,20 @@ def test_declined_stream_edit_does_not_send_the_unseen_tail():
     # Terminal for the run: the tail must not be re-sent anywhere.
     assert consumer._egress_declined is True
 
+    # ...and DRIVE the fallback that would resend it. Asserting the flag alone
+    # checks a NEIGHBOUR of the property this test is named for: review removed
+    # the early return in `_send_fallback_final` and this case still passed.
+    from gateway.stream_consumer_fallback import StreamFallbackMixin
+
+    class _Fallback(StreamFallbackMixin, type(consumer)):
+        pass
+
+    consumer.__class__ = _Fallback
+    asyncio.run(consumer._send_fallback_final("tail"))
+    # The decline was injected as a SendResult (no frame was sent for it), so
+    # the invariant is that the fallback added NOTHING to the wire.
+    assert connector.ops == []
+
 
 # ── the terminal-decline latch (the structural fix) ─────────────────────────
 
@@ -810,3 +824,24 @@ def test_cosmetic_ops_are_not_latched():
     asyncio.run(adapter.send_typing("C1"))
 
     assert "typing" in connector.ops
+
+
+@pytest.mark.parametrize(
+    "lane",
+    ["tool_progress", "progress_overflow", "heartbeat", "stale_final_reconcile"],
+)
+def test_latch_covers_the_edit_to_send_lanes_without_a_local_check(lane):
+    """The point of the choke point: lanes nobody has patched are still safe.
+
+    Review round 7 named these four as "still broken" — each does
+    `edit_message(...)` and, on any failure, `adapter.send(same chat, same
+    content)`. None of them has a local decline check. The latch blocks the
+    retry at the wire anyway, which is the whole argument for fixing this at
+    the choke point instead of at the ~60 outbound call sites.
+    """
+    adapter, connector = _latch_adapter({"edit"})
+
+    asyncio.run(adapter.edit_message("C1", "m1", "CONTENT"))
+    asyncio.run(adapter.send("C1", "CONTENT"))
+
+    assert connector.ops == ["edit"], lane

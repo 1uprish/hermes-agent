@@ -121,6 +121,33 @@ def _is_missing_gateway_relay(exc: ImportError) -> bool:
     )
 
 
+def _live_relay_fronted() -> Optional[Set[str]]:
+    """The connected relay adapter's OWN fronted set, or None when there is no
+    live adapter to ask.
+
+    This is the exact signal `resolve_delivery_transport` routes on, so asking
+    it here removes the possibility of the guard and the router disagreeing.
+    """
+    try:
+        from gateway.config import Platform
+        from gateway.run import _gateway_runner_ref
+
+        runner = _gateway_runner_ref()
+        if runner is None:
+            return None
+        relay = (getattr(runner, "adapters", None) or {}).get(Platform.RELAY)
+        fronts = getattr(relay, "fronts_platform", None)
+        if relay is None or not callable(fronts):
+            return None
+        return {
+            str(p.value).strip().lower()
+            for p in Platform
+            if str(getattr(p, "value", "")).lower() != "relay" and fronts(p)
+        }
+    except Exception:  # noqa: BLE001 - no live runner ⇒ fall back to config
+        return None
+
+
 def _relay_fronted() -> Set[str]:
     """Platforms the connector fronts for this gateway.
 
@@ -147,6 +174,16 @@ def _relay_fronted() -> Set[str]:
             ) from exc
         return set()
 
+    # PREFER THE LIVE ADAPTER'S OWN ANSWER. `resolve_delivery_transport` asks
+    # the CONNECTED relay adapter (`fronts_platform`, from the identity set sent
+    # at handshake); reconstructing routing from mutable environment state is a
+    # DIFFERENT snapshot, and the two disagree whenever GATEWAY_RELAY_PLATFORMS
+    # changes or is momentarily absent after connect. Review probed exactly
+    # that: guard said "not relay-routed", delivery routed relay, and the guard
+    # was skipped for a relay send. Same source, same answer.
+    live = _live_relay_fronted()
+    if live is not None:
+        return live
     try:
         # CASE-NORMALIZED. `relay_routed_platform` lowercases the requested
         # name, so an un-normalized set made a mixed-case configured platform

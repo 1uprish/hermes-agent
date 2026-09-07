@@ -791,3 +791,50 @@ def test_healthy_config_with_enabled_native_still_bypasses_the_guard(monkeypatch
         ),
     )
     assert eg.authorize_relay_target("discord", "999") is None
+
+
+def test_guard_uses_the_live_adapter_not_stale_env_discovery(monkeypatch):
+    """R7-1: the guard and the delivery router read DIFFERENT snapshots.
+
+    `resolve_delivery_transport` asks the CONNECTED relay adapter
+    (`fronts_platform`, from the handshake identity set). The guard rebuilt
+    routing from `GATEWAY_RELAY_PLATFORMS`. When that env is stale or
+    momentarily empty the guard said "native", the router sent over the relay,
+    and the guard was skipped for a relay send.
+    """
+    from types import SimpleNamespace
+
+    import gateway.relay as gr
+    import gateway.relay.egress as eg
+    import gateway.run as gr_run
+    from gateway.config import Platform
+
+    class _LiveRelay:
+        def fronts_platform(self, p):
+            return getattr(p, "value", p) == "discord"
+
+    monkeypatch.setattr(
+        gr_run,
+        "_gateway_runner_ref",
+        lambda: SimpleNamespace(adapters={Platform.RELAY: _LiveRelay()}),
+        raising=False,
+    )
+    # Env discovery is empty/stale — the disagreement condition.
+    monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: set())
+    monkeypatch.setattr(eg, "attested_relay_targets", lambda p: set())
+
+    assert eg.relay_routed_platform("discord") is True
+    assert eg.authorize_relay_target("discord", "999") is not None
+
+
+def test_guard_falls_back_to_config_when_no_live_adapter(monkeypatch):
+    """Control: with no live runner (CLI/cron) the config path must still work."""
+    import gateway.relay as gr
+    import gateway.relay.egress as eg
+    import gateway.run as gr_run
+
+    monkeypatch.setattr(gr_run, "_gateway_runner_ref", lambda: None, raising=False)
+    monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: {"discord"})
+    monkeypatch.setattr(eg, "attested_relay_targets", lambda p: set())
+
+    assert eg.authorize_relay_target("discord", "999") is not None
