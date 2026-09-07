@@ -228,10 +228,66 @@ export const defaultLargeTheme: DashboardTheme = {
   },
 };
 
+// Adapted from the Cream palette supplied in issue #104720.
+export const creamTheme: DashboardTheme = {
+  name: "cream",
+  label: "Cream",
+  description: "Warm cream canvas, charcoal text and soft shaded sidebars",
+  palette: {
+    background: { hex: "#fdfcf8", alpha: 1 },
+    midground: { hex: "#2d2d2d", alpha: 1 },
+    foreground: { hex: "#1a1a1a", alpha: 0.08 },
+    warmGlow: "rgba(245, 230, 200, 0.15)",
+    noiseOpacity: 0.3,
+  },
+  typography: {
+    ...DEFAULT_TYPOGRAPHY,
+    fontSans: `"Inter", Roboto, "Open Sans", Arial, ${SYSTEM_SANS}`,
+    fontDisplay: `"Inter", Roboto, "Open Sans", Arial, ${SYSTEM_SANS}`,
+    fontMono: `"JetBrains Mono", ${SYSTEM_MONO}`,
+    lineHeight: "1.6",
+    letterSpacing: "-0.003em",
+  },
+  layout: DEFAULT_LAYOUT,
+  terminalBackground: "#fdfcf8",
+  terminalForeground: "#2d2d2d",
+  colorOverrides: {
+    border: "#e8e4da", input: "#e8e4da", ring: "#80602c",
+    card: "#ffffff", cardForeground: "#2d2d2d",
+    popover: "#fdfcf8", popoverForeground: "#2d2d2d",
+    muted: "#f3f0e8", mutedForeground: "#6b655d",
+    accent: "#e8d4b9", accentForeground: "#2d2d2d",
+    // Darker than the supplied gold so normal-sized button labels meet AA.
+    primary: "#80602c", primaryForeground: "#fdfcf8",
+    success: "#486834", warning: "#80602c", destructive: "#a3423d",
+    destructiveForeground: "#ffffff",
+  },
+  componentStyles: {
+    sidebar: {
+      background: "linear-gradient(180deg, #faf8f3 0%, #f5f2eb 100%)",
+      borderRight: "1px solid #e8e4da",
+    },
+    card: {
+      background: "#ffffff", border: "1px solid #eeebe4",
+      boxShadow: "0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03)",
+    },
+    header: {
+      background: "linear-gradient(180deg, #fdfcf8 0%, #faf8f3 100%)",
+      borderBottom: "1px solid #e8e4da",
+    },
+    page: { background: "#fdfcf8" },
+  },
+  customCSS: `
+    .font-mondwest, .font-expanded { font-family: var(--font-sans) !important; }
+    .font-compressed { font-family: "Arial Narrow", Arial, sans-serif !important; }
+  `,
+};
+
 export const BUILTIN_THEMES: Record<string, DashboardTheme> = {
   default: defaultTheme,
   "default-large": defaultLargeTheme,
   "nous-blue": nousBlueTheme,
+  cream: creamTheme,
   midnight: midnightTheme,
   ember: emberTheme,
   mono: monoTheme,

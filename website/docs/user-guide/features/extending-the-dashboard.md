@@ -286,13 +286,15 @@ Each built-in ships its own palette, typography, and layout — switching produc
 |-------|---------|------------|--------|
 | **Hermes Teal** (`default`) | Dark teal + cream | System stack, 15px | 0.5rem radius, comfortable |
 | **Hermes Teal (Large)** (`default-large`) | Same as default | System stack, 18px, line-height 1.65 | 0.5rem radius, spacious |
+| **Cream** (`cream`) | Warm light cream + charcoal | Sans-serif body and headings, 15px | 0.5rem radius, comfortable |
+| **Nous Blue** (`nous-blue`) | Light canvas + vivid blue accents | System stack, 15px | 0.5rem radius, comfortable |
 | **Midnight** (`midnight`) | Deep blue-violet | Inter + JetBrains Mono, 14px | 0.75rem radius, comfortable |
 | **Ember** (`ember`) | Warm crimson + bronze | Spectral (serif) + IBM Plex Mono, 15px | 0.25rem radius, comfortable |
 | **Mono** (`mono`) | Grayscale | IBM Plex Sans + IBM Plex Mono, 13px | 0 radius, compact |
 | **Cyberpunk** (`cyberpunk`) | Neon green on black | Share Tech Mono everywhere, 14px | 0 radius, compact |
 | **Rosé** (`rose`) | Pink + ivory | Fraunces (serif) + DM Mono, 16px | 1rem radius, spacious |
 
-Themes that reference Google Fonts (all except Hermes Teal) load the stylesheet on demand — the first time you switch to them a `<link>` tag is injected into `<head>`.
+Themes that reference Google Fonts load the stylesheet on demand — the first time you switch to them a `<link>` tag is injected into `<head>`. Cream uses installed fonts with system fallbacks and makes no external font request. Cream is optional: select it in the theme switcher; Hermes Teal remains the default and Nous Blue remains available as another light preset.
 
 ### Full theme YAML reference
 
