@@ -12,6 +12,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+          fetch-depth: 30
         timeout-minutes: 2
       - name: Probe dependencies
         shell: pwsh
@@ -22,7 +23,7 @@ jobs:
         timeout-minutes: 6
         run: |
           python evals/desktop_bug_campaign/windows_probe.py
-          python evals/desktop_bug_campaign/windows_receipt_matrix.py
+          # Historical cmd.exe/text-ASAR matrix is not a positive control.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         timeout-minutes: 2
@@ -31,11 +32,12 @@ jobs:
           path: windows-evidence/
   staging:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+          fetch-depth: 30
         timeout-minutes: 2
       - name: Exact reporter Node
         shell: pwsh
@@ -46,7 +48,7 @@ jobs:
           "$env:RUNNER_TEMP/node/node-v22.23.2-win-x64" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Fresh dependencies and actual native staging
         shell: pwsh
-        timeout-minutes: 13
+        timeout-minutes: 23
         run: |
           New-Item -ItemType Directory windows-evidence -Force
           node --version
@@ -65,6 +67,14 @@ jobs:
           $testCode = $LASTEXITCODE
           Pop-Location
           if ($testCode -ne 0) { exit $testCode }
+          Push-Location apps/desktop
+          npm.cmd run build *> ../../windows-evidence/build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm.cmd run builder -- --win --x64 --dir --publish never *> ../../windows-evidence/pack.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+          python evals/desktop_bug_campaign/windows_real_artifact.py *> windows-evidence/real-artifact.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           exit $stageCode
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
