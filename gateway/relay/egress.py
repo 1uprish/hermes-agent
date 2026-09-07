@@ -343,6 +343,9 @@ def attested_relay_targets(platform_name: str) -> Set[str]:
     return attested
 
 
+_UNSET = object()
+
+
 def _has_native_credential(platform_name: str) -> bool:
     """Whether the gateway itself holds a token that can send to *platform_name*.
 
@@ -363,7 +366,7 @@ def _has_native_credential(platform_name: str) -> bool:
         return True
 
 
-def _is_unresolved_handle(platform_name: str, target: str) -> bool:
+def _is_unresolved_handle(platform_name: str, target: str, native_token: Any = _UNSET) -> bool:
     """Whether *target* is a NAME the gateway cannot compare against an id.
 
     Provenance records RESOLVED destinations (numeric chat ids). A Telegram
@@ -388,11 +391,15 @@ def _is_unresolved_handle(platform_name: str, target: str) -> bool:
     # So the exemption survives only when there is NO native credential able to
     # send this handle. `_send_to_platform` reaches for `pconfig.token`; if that
     # exists, delivery never involves the connector.
+    if native_token is not _UNSET:
+        # The caller passed the token from the SAME config snapshot it will
+        # dispatch with; that is authoritative and race-free.
+        return not native_token
     return not _has_native_credential(platform_name)
 
 
 def authorize_relay_target(
-    platform_name: str, chat_id: Any, thread_id: Any = None
+    platform_name: str, chat_id: Any, thread_id: Any = None, *, native_token: Any = _UNSET
 ) -> Optional[str]:
     """Return an error string when this relay destination may not be named.
 
@@ -467,7 +474,7 @@ def authorize_relay_target(
     # before authorizing, so both layers apply. That needs a resolution
     # round-trip through the connector — new wire surface — so it belongs in
     # its own phase, not bolted onto this one.
-    if _is_unresolved_handle(name, target):
+    if _is_unresolved_handle(name, target, native_token):
         logger.debug(
             "relay target '%s:%s' is an unresolved handle — deferring "
             "authorization to the connector's egress floor",

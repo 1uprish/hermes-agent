@@ -60,7 +60,11 @@ def _handle_list():
         return json.dumps(_error(f"Failed to load channel directory: {e}"))
 
 
-def _authorize_relay_target(platform_name: str, chat_id, thread_id=None) -> str | None:
+_TOKEN_UNSET = object()
+
+
+def _authorize_relay_target(platform_name: str, chat_id, thread_id=None, *,
+                            native_token=_TOKEN_UNSET) -> str | None:
     """Relay egress-authorization guard (P5a); None when the send may proceed.
 
     Thin delegate to ``gateway.relay.egress`` so the tool keeps working in
@@ -122,7 +126,18 @@ def _authorize_relay_target(platform_name: str, chat_id, thread_id=None) -> str 
         )
 
     try:
-        return authorize_relay_target(platform_name, chat_id, thread_id)
+        # ONE SNAPSHOT. `native_token` is the token from the SAME pconfig the
+        # dispatch below will actually send with. Letting the guard reload
+        # config independently allowed a transition where authorization saw a
+        # connector-only setup (exemption granted) while dispatch still held a
+        # native token and sent the unattested handle itself.
+        if native_token is _TOKEN_UNSET:
+            # A caller that forgets the snapshot must NOT silently look like
+            # "no native token", which would grant the @handle exemption.
+            return authorize_relay_target(platform_name, chat_id, thread_id)
+        return authorize_relay_target(
+            platform_name, chat_id, thread_id, native_token=native_token
+        )
     except Exception:  # noqa: BLE001 - the guard faulted; FAIL CLOSED
         logger.exception(
             "relay target authorization FAILED for %s — refusing the send",
@@ -162,6 +177,9 @@ def _handle_react(args, remove=False):
     # P5(a): same egress-authorization floor as the send path — a reaction is
     # an outbound act against a named destination, so an unattested relay
     # target must be refused here too, not just on `send`.
+    # The react path has no pconfig snapshot of its own; it dispatches through
+    # the LIVE adapter below, never through a native token, so the guard does
+    # its own credential probe here.
     _relay_denial = _authorize_relay_target(platform_name, chat_id, _thread_id)
     if _relay_denial:
         return tool_error(_relay_denial)
@@ -229,7 +247,8 @@ def _handle_send(args):
     # turns those cases red.
     # thread_id is part of the DESTINATION: on Discord the thread is the literal
     # REST target, so an attested parent must not vouch for an arbitrary thread.
-    _relay_denial = _authorize_relay_target(platform_name, chat_id, thread_id)
+    _relay_denial = _authorize_relay_target(platform_name, chat_id, thread_id,
+                                            native_token=getattr(pconfig, "token", None))
     if _relay_denial:
         return tool_error(_relay_denial)
 

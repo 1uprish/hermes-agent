@@ -385,7 +385,7 @@ class RelayAdapter(BasePlatformAdapter):
 
     def _latch_declined(self, chat_id: Any, op: str) -> None:
         if op in self._DECLINE_LATCHED_OPS:
-            self._declined_chats.add(self._latch_key(chat_id))
+            self._declined_chats.update(self._latch_keys_for(chat_id))
 
     def _clear_declined(self, chat_id: Any, op: str = "") -> None:
         """Clear the latch — only on a CONTENT op the connector accepted.
@@ -397,20 +397,61 @@ class RelayAdapter(BasePlatformAdapter):
         """
         if op and op not in self._DECLINE_LATCHED_OPS:
             return
-        self._declined_chats.discard(self._latch_key(chat_id))
+        for key in self._latch_keys_for(chat_id):
+            self._declined_chats.discard(key)
 
-    @staticmethod
-    def _latch_key(chat_id: Any) -> str:
-        """The chat a latch applies to, with any thread suffix removed.
+    def _latch_key(self, chat_id: Any) -> str:
+        """The identity a latch applies to.
 
-        A thread lives INSIDE its parent chat, so a refusal of the parent must
-        also stop `chat:thread` frames — otherwise the same content reaches the
-        same conversation one level down.
+        NO COLON SPLITTING. An earlier version derived the "parent chat" as
+        `str(chat_id).split(":", 1)[0]`, which collides for identifiers that
+        legitimately contain colons: `!room:tenant-a` and `!room:tenant-b` both
+        keyed `!room`, so a decline in one room muted another and inbound from
+        one cleared the other's refusal. That is the same mistake already fixed
+        once in `gateway/relay/egress.py::_session_ids` — parent identity is
+        never recoverable from identifier TEXT.
+
+        Thread coverage is handled structurally instead: `_thread_parent`
+        consults the platform's own scope records, so a thread is latched with
+        its parent only when the platform actually reports that relationship.
         """
-        return str(chat_id).split(":", 1)[0].strip()
+        return str(chat_id).strip()
+
+    def _latch_keys_for(self, chat_id: Any) -> List[str]:
+        """Every identity a decline for *chat_id* should suppress.
+
+        The chat itself, plus its parent when the platform's scope records say
+        this target is a thread inside one. Structured lookup, not text parsing.
+        """
+        keys = [self._latch_key(chat_id)]
+        parent = self._thread_parent(chat_id)
+        if parent:
+            parent_key = self._latch_key(parent)
+            if parent_key not in keys:
+                keys.append(parent_key)
+        return keys
+
+    def _thread_parent(self, chat_id: Any) -> Optional[str]:
+        """The parent chat of *chat_id*, from RECORDED structure — never text.
+
+        `_auto_thread_by_chat` maps parent chat -> (thread_id, name) for threads
+        the connector created on our behalf, so the parent is found by looking
+        the relationship up rather than by parsing an identifier.
+        """
+        try:
+            target = str(chat_id)
+            for parent, entry in (self._auto_thread_by_chat or {}).items():
+                thread_id = entry[0] if isinstance(entry, (tuple, list)) and entry else None
+                if thread_id and str(thread_id) == target and str(parent) != target:
+                    return str(parent)
+        except Exception:  # noqa: BLE001 - identity lookup must never break egress
+            logger.debug("thread-parent lookup failed", exc_info=True)
+        return None
 
     def _is_latched(self, chat_id: Any, op: str) -> bool:
-        return op in self._DECLINE_LATCHED_OPS and self._latch_key(chat_id) in self._declined_chats
+        if op not in self._DECLINE_LATCHED_OPS:
+            return False
+        return any(k in self._declined_chats for k in self._latch_keys_for(chat_id))
 
     async def _outbound(self, chat_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
         """Send one outbound frame tagged with the chat's underlying platform.
@@ -888,13 +929,15 @@ class RelayAdapter(BasePlatformAdapter):
         # class default is False, so only an explicit descriptor bit turns it on.
         self.supports_inchannel_continuable = bool(getattr(descriptor, "supports_inchannel_continuable", False))
 
-    def _clear_declined_for_turn(self, event: Any) -> None:
-        """Drop the terminal-decline latch for the chat this inbound belongs to."""
+    def clear_egress_latch(self, platform: Any, chat_id: Any) -> None:
+        """Drop the terminal-decline latch for *chat_id*. Called by the runner
+        AFTER ingress admission, so a dropped or unauthorized event cannot clear
+        a refusal that belongs to an active turn.
+        """
         try:
-            source = getattr(event, "source", None)
-            chat_id = getattr(source, "chat_id", None) if source else None
             if chat_id:
-                self._declined_chats.discard(self._latch_key(chat_id))
+                for key in self._latch_keys_for(chat_id):
+                    self._declined_chats.discard(key)
         except Exception:  # noqa: BLE001 - teardown must never break inbound
             logger.debug("relay latch teardown skipped", exc_info=True)
 
@@ -911,14 +954,6 @@ class RelayAdapter(BasePlatformAdapter):
                 return
             self._seen_inbound[dedupe_key] = None
             self._evict_oldest(self._seen_inbound, self._SEEN_INBOUND_MAX)
-        # NEW TURN = LATCH TEARDOWN. Without this the latch has no boundary and
-        # becomes an outage mechanism: a content op can never reach the
-        # connector to succeed (the latch blocks it locally), so nothing could
-        # ever clear it once "clear on cosmetic success" was correctly removed.
-        # A fresh inbound message for a chat is the natural generation marker —
-        # the connector is evidently willing to talk about this chat again, and
-        # the next content op gets one real attempt at the wire.
-        self._clear_declined_for_turn(event)
         self._capture_scope(event)
         self._stamp_slack_session_thread(event)
         # A structured prompt answer resolves its waiting primitive and is CONSUMED —
@@ -1780,7 +1815,15 @@ class RelayAdapter(BasePlatformAdapter):
             },
             platform=follow_up_platform,
         )
-        return _send_result(result)
+        # CARRY THE STRUCTURED DECLINE. This lane is addressed by `session_key`,
+        # not `chat_id`, so it has no latch identity — the latch is per chat and
+        # inventing one from a session key would be exactly the text-derived
+        # identity that blocker 2 was about. What it must NOT do is discard the
+        # connector's verdict: dropping `raw_response` is precisely how the
+        # `edit_message` lane laundered declines into a plain send.
+        if isinstance(result, dict) and not result.get("success") and is_egress_decline(result):
+            log_decline("follow_up", session_key, result)
+        return _send_result(result, raw_response=result)
 
     # ── Phase 2 media ─────────────────────────────────────────────────────
 

@@ -19,6 +19,7 @@ import os
 
 import asyncio
 from types import SimpleNamespace
+from types import SimpleNamespace
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -884,14 +885,38 @@ def test_a_cosmetic_success_does_not_clear_the_latch():
 
 
 def test_a_thread_inside_a_refused_chat_is_latched():
-    """A thread lives INSIDE its parent, so the same content would reach the
-    same conversation one level down: ops were ['edit', 'send']."""
+    """A thread lives INSIDE its parent, so the same content would otherwise
+    reach the same conversation one level down.
+
+    The relationship is read from the adapter's RECORDED auto-thread map, not
+    parsed out of the identifier — see `test_latch_keys_do_not_collide_on_colons`.
+    """
     adapter, connector = _latch_adapter({"edit"})
+    adapter._auto_thread_by_chat["C1"] = ("C1-thread", "topic")
 
     asyncio.run(adapter.edit_message("C1", "m1", "SECRET"))
-    asyncio.run(adapter.send("C1:99", "SECRET"))
+    asyncio.run(adapter.send("C1-thread", "SECRET"))
 
     assert connector.ops == ["edit"]
+
+
+def test_latch_keys_do_not_collide_on_colons():
+    """Matrix room ids legitimately contain colons.
+
+    Splitting on ':' keyed `!room:tenant-a` and `!room:tenant-b` both as
+    `!room`, so a decline in one room muted the other and inbound from one
+    cleared the other's refusal. Identifier TEXT never yields parent identity —
+    the same mistake already fixed once in `egress.py::_session_ids`.
+    """
+    adapter, connector = _latch_adapter({"edit"})
+
+    assert adapter._latch_key("!room:tenant-a") != adapter._latch_key("!room:tenant-b")
+
+    asyncio.run(adapter.edit_message("!room:tenant-a", "m1", "SECRET"))
+    asyncio.run(adapter.send("!room:tenant-b", "unrelated room"))
+
+    # The unrelated room is NOT muted.
+    assert connector.ops == ["edit", "send"]
 
 
 def test_the_latch_normalises_int_and_str_chat_ids():
@@ -963,20 +988,24 @@ def test_a_new_inbound_turn_clears_the_latch():
     assert connector.ops == ["edit"]
 
     # A new inbound message arrives for this chat; the connector now accepts.
-    adapter._clear_declined_for_turn(SimpleNamespace(source=SimpleNamespace(chat_id="C1")))
+    adapter.clear_egress_latch(None, "C1")
     connector.refuse = set()
     asyncio.run(adapter.send("C1", "legitimate next turn"))
     assert connector.ops == ["edit", "send"]
 
 
-def test_on_inbound_is_the_thing_that_clears_the_latch():
-    """Caller-level. The two tests above drive `_clear_declined_for_turn`
-    DIRECTLY, so they pass even if `_on_inbound` never calls it — the exact gap
-    that produced three earlier blockers. This drives the real inbound entry
-    point, and scopes teardown to the arriving chat only.
+def test_admission_is_the_thing_that_clears_the_latch():
+    """CALLER-LEVEL, and at the RIGHT caller.
+
+    Teardown previously sat on the adapter's raw `_on_inbound`, which runs
+    BEFORE profile routing, the ignored-channel guard, plugin hooks and user
+    authorization — so a dropped or unauthorized event could clear a refusal
+    belonging to an active turn. It now runs after `_hm_admit_event`, the one
+    gate every entry path shares (Discord interaction passthrough builds its
+    own MessageEvent and calls handle_message directly).
     """
     from gateway.config import Platform
-    from gateway.platforms.base import MessageEvent
+    from gateway.run_inbound import GatewayInboundMixin
     from gateway.session import SessionSource
 
     adapter, connector = _latch_adapter({"edit"})
@@ -987,22 +1016,85 @@ def test_on_inbound_is_the_thing_that_clears_the_latch():
     assert adapter._latch_key("C1") in adapter._declined_chats
     assert adapter._latch_key("C2") in adapter._declined_chats
 
-    event = MessageEvent(
-        text="a new turn",
-        source=SessionSource(platform=Platform.SLACK, chat_id="C1", user_id="u1"),
-        message_id="in-1",
+    runner = object.__new__(GatewayInboundMixin)
+    runner.adapters = {Platform.RELAY: adapter}
+    runner._clear_egress_latch_for_turn(
+        SessionSource(platform=Platform.SLACK, chat_id="C1", user_id="u1")
     )
-    asyncio.run(adapter._on_inbound(event))
 
     assert adapter._latch_key("C1") not in adapter._declined_chats
     # C2 got no message, so its refusal must still stand.
     assert adapter._latch_key("C2") in adapter._declined_chats
 
 
-def test_latch_teardown_survives_a_malformed_inbound():
-    """Teardown must never break inbound delivery."""
-    from types import SimpleNamespace
+def test_latch_teardown_survives_a_raising_identity_lookup():
+    """The exception shield must face a REAL exception.
+
+    An earlier version passed `SimpleNamespace(source=None)`, which is an
+    ordinary getattr path — removing the try/except left the file green.
+    """
+    adapter, _ = _latch_adapter({"edit"})
+
+    class _Exploding:
+        def __str__(self):
+            raise RuntimeError("identity blew up")
+
+    # Must not propagate: teardown can never break inbound delivery.
+    adapter.clear_egress_latch(None, _Exploding())
+
+
+def test_handle_message_clears_the_latch_after_admission():
+    """CALLER-LEVEL at the real entry point.
+
+    The test above drives `_clear_egress_latch_for_turn` directly, so it passes
+    even if `_handle_message` never calls it. This runs the production
+    `_handle_message` with admission stubbed to ADMIT, and asserts the latch is
+    gone; then with admission stubbed to DROP, and asserts it survives.
+    """
+    from gateway.config import Platform
+    from gateway.run_inbound import GatewayInboundMixin
+    from gateway.session import SessionSource
 
     adapter, _ = _latch_adapter({"edit"})
-    adapter._clear_declined_for_turn(SimpleNamespace(source=None))
-    adapter._clear_declined_for_turn(SimpleNamespace())
+    asyncio.run(adapter.edit_message("C1", "m1", "SECRET"))
+    assert "C1" in adapter._declined_chats
+
+    source = SessionSource(platform=Platform.SLACK, chat_id="C1", user_id="u1")
+    event = SimpleNamespace(source=source)
+
+    class _Runner(GatewayInboundMixin):
+        def __init__(self, admit):
+            self.adapters = {Platform.RELAY: adapter}
+            self._admit = admit
+
+        async def _hm_admit_event(self, ev):
+            return (ev, source, False) if self._admit else None
+
+        def _hm_estop_gate(self, *a, **kw):
+            return "stop-here"  # end the turn right after teardown
+
+    # DROPPED at admission: the refusal must survive.
+    asyncio.run(_Runner(admit=False)._handle_message(event))
+    assert "C1" in adapter._declined_chats
+
+    # ADMITTED: teardown runs.
+    asyncio.run(_Runner(admit=True)._handle_message(event))
+    assert "C1" not in adapter._declined_chats
+
+
+def test_follow_up_carries_the_structured_decline():
+    """`send_follow_up` is addressed by session_key, so it has no latch identity
+    — but it must still not DISCARD the connector's verdict, which is exactly
+    how the edit lane laundered declines into a plain send."""
+    adapter, connector = _latch_adapter(set())
+
+    async def _declining_follow_up(action, *, platform=None):
+        connector.ops.append("follow_up")
+        return dict(CODE_ONLY_DECLINE)
+
+    connector.send_follow_up = _declining_follow_up
+
+    result = asyncio.run(adapter.send_follow_up("sess-1", "discord.interaction_token", "SECRET"))
+
+    assert not result.success
+    assert is_egress_decline(result.raw_response)

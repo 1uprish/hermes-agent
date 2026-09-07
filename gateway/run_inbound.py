@@ -108,6 +108,16 @@ class GatewayInboundMixin:
             # Record rate limit so subsequent messages are silently ignored
             pairing_store._record_rate_limit(platform_name, source.user_id)
 
+    def _clear_egress_latch_for_turn(self, source: SessionSource) -> None:
+        """Drop the relay adapter's terminal-decline latch for this chat."""
+        try:
+            adapter = (getattr(self, "adapters", None) or {}).get(Platform.RELAY)
+            clear = getattr(adapter, "clear_egress_latch", None)
+            if callable(clear):
+                clear(getattr(source, "platform", None), getattr(source, "chat_id", None))
+        except Exception:  # noqa: BLE001 - teardown must never break inbound
+            logger.debug("egress latch teardown skipped", exc_info=True)
+
     async def _hm_admit_event(
         self, event: "MessageEvent"
     ) -> Optional[Tuple["MessageEvent", SessionSource, bool]]:
@@ -1181,6 +1191,15 @@ class GatewayInboundMixin:
         if _admitted is None:
             return None
         event, source, is_internal = _admitted
+        # TERMINAL-DECLINE LATCH TEARDOWN. Deliberately placed AFTER admission,
+        # not on the adapter's raw inbound: profile routing, the ignored-channel
+        # guard, plugin hooks and user authorization all reject events above,
+        # and a rejected event must not be able to clear a refusal belonging to
+        # an active turn. This is also the single entry point every lane shares
+        # — Discord interaction passthrough builds its own MessageEvent and
+        # calls handle_message directly, so a teardown on the relay's inbound
+        # handler left those turns muted.
+        self._clear_egress_latch_for_turn(source)
 
         _paused_notice = self._hm_estop_gate(event, source, is_internal)
         if _paused_notice is not None:
