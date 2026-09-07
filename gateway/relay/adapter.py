@@ -400,33 +400,43 @@ class RelayAdapter(BasePlatformAdapter):
         for key in self._latch_keys_for(chat_id):
             self._declined_chats.discard(key)
 
-    def _latch_key(self, chat_id: Any) -> str:
-        """The identity a latch applies to.
+    def _latch_key(self, chat_id: Any, platform: Any = None) -> str:
+        """The identity a latch applies to: LOGICAL PLATFORM plus exact chat id.
 
-        NO COLON SPLITTING. An earlier version derived the "parent chat" as
-        `str(chat_id).split(":", 1)[0]`, which collides for identifiers that
-        legitimately contain colons: `!room:tenant-a` and `!room:tenant-b` both
-        keyed `!room`, so a decline in one room muted another and inbound from
-        one cleared the other's refusal. That is the same mistake already fixed
-        once in `gateway/relay/egress.py::_session_ids` — parent identity is
-        never recoverable from identifier TEXT.
+        THE PLATFORM COMPONENT IS LOAD-BEARING. One relay adapter fronts several
+        logical platforms, so native ids collide across them: a Discord refusal
+        for chat `42` was cleared by an admitted Telegram event for chat `42`,
+        and the Discord fallback then reached the connector.
+
+        NO COLON SPLITTING on the chat part. An earlier version derived the
+        "parent chat" as `str(chat_id).split(":", 1)[0]`, which collides for
+        identifiers that legitimately contain colons: `!room:tenant-a` and
+        `!room:tenant-b` both keyed `!room`, so a decline in one room muted
+        another. That is the same mistake already fixed once in
+        `gateway/relay/egress.py::_session_ids` — parent identity is never
+        recoverable from identifier TEXT.
 
         Thread coverage is handled structurally instead: `_thread_parent`
         consults the platform's own scope records, so a thread is latched with
         its parent only when the platform actually reports that relationship.
         """
-        return str(chat_id).strip()
+        chat = str(chat_id).strip()
+        name = platform if platform is not None else self._chat_platform(chat)
+        name = str(getattr(name, "value", name) or "").strip().lower()
+        return f"{name}\x00{chat}"
 
-    def _latch_keys_for(self, chat_id: Any) -> List[str]:
+    def _latch_keys_for(self, chat_id: Any, platform: Any = None) -> "list[str]":
         """Every identity a decline for *chat_id* should suppress.
 
         The chat itself, plus its parent when the platform's scope records say
         this target is a thread inside one. Structured lookup, not text parsing.
+        The parent keeps the same platform component — a thread cannot belong to
+        a different platform than its parent.
         """
-        keys = [self._latch_key(chat_id)]
+        keys = [self._latch_key(chat_id, platform)]
         parent = self._thread_parent(chat_id)
         if parent:
-            parent_key = self._latch_key(parent)
+            parent_key = self._latch_key(parent, platform)
             if parent_key not in keys:
                 keys.append(parent_key)
         return keys
@@ -616,7 +626,18 @@ class RelayAdapter(BasePlatformAdapter):
         if result.get("ambiguous"):
             # Ack lost (transport timeout, returned rather than raised): same
             # contract as the except branch — keep interception armed.
-            return SendResult(success=False, error=str(result.get("error") or "draft ack lost"))
+            #
+            # RAW BODY PRESERVED. Dropping it made `declined_send` fall through
+            # to the error-text branch, and an ambiguous result whose text
+            # happens to carry the decline marker ("... egress declined: ack
+            # lost") then read as a DEFINITE refusal and terminated the run.
+            # Ambiguous means the frame may well have been delivered, so it is
+            # a transport outcome, never an authorization one.
+            return SendResult(
+                success=False,
+                error=str(result.get("error") or "draft ack lost"),
+                raw_response=result,
+            )
         # DEFINITE connector rejection: disarm. The stream consumer falls back to
         # edit-based streaming and its turn-final must go out as a REAL send, not a
         # seal on a stream the connector just declared unusable.
@@ -701,7 +722,14 @@ class RelayAdapter(BasePlatformAdapter):
                 self._sealed_draft_by_chat.pop(draft_key, None)
             raise
         if result is None:
-            return SendResult(success=False, error="draft seal ambiguous after retry (transport ack lost)")
+            # Same ambiguity contract as send_draft: the retry's ack was lost,
+            # so the seal may have been applied. Marked explicitly rather than
+            # left to text inference.
+            return SendResult(
+                success=False,
+                error="draft seal ambiguous after retry (transport ack lost)",
+                raw_response={"success": False, "ambiguous": True},
+            )
         if result.get("success"):
             # The connector returns the stream's ts as the message identity.
             return SendResult(success=True, message_id=str(result.get("message_id") or "") or None)
@@ -711,6 +739,13 @@ class RelayAdapter(BasePlatformAdapter):
         # connector refused, to the same chat).
         if is_egress_decline(result):
             log_decline("draft_seal", chat_id, result)
+            # ARM THE LATCH. This path posts through `_attempt` directly rather
+            # than `_outbound`, so it never reached `_latch_declined`. The
+            # immediate plain-send fallback was suppressed by the caller's own
+            # check, but LATER same-turn sends were not (probe: wire
+            # ['draft', 'draft', 'send'] with the third frame carrying content
+            # the connector had refused).
+            self._latch_declined(chat_id, "draft")
         return SendResult(
             success=False,
             error=str(result.get("error") or decline_error(result) or "draft seal failed"),
@@ -939,13 +974,19 @@ class RelayAdapter(BasePlatformAdapter):
         self.supports_inchannel_continuable = bool(getattr(descriptor, "supports_inchannel_continuable", False))
 
     def clear_egress_latch(self, platform: Any, chat_id: Any) -> None:
-        """Drop the terminal-decline latch for *chat_id*. Called by the runner
-        AFTER ingress admission, so a dropped or unauthorized event cannot clear
-        a refusal that belongs to an active turn.
+        """Drop the terminal-decline latch for *platform* + *chat_id*.
+
+        Called by the runner once it OWNS a genuinely new turn, so neither a
+        dropped/unauthorized event nor busy-session traffic can clear a refusal
+        belonging to the active turn.
+
+        The platform is honoured, not ignored: one relay adapter fronts several
+        logical platforms, and without it an admitted Telegram event for chat
+        `42` cleared a Discord refusal for chat `42`.
         """
         try:
             if chat_id:
-                for key in self._latch_keys_for(chat_id):
+                for key in self._latch_keys_for(chat_id, platform):
                     self._declined_chats.discard(key)
         except Exception:  # noqa: BLE001 - teardown must never break inbound
             logger.debug("relay latch teardown skipped", exc_info=True)

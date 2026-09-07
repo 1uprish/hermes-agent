@@ -1043,43 +1043,109 @@ def test_latch_teardown_survives_a_raising_identity_lookup():
     adapter.clear_egress_latch(None, _Exploding())
 
 
-def test_handle_message_clears_the_latch_after_admission():
-    """CALLER-LEVEL at the real entry point.
+def test_only_a_genuinely_new_turn_clears_the_latch():
+    """CALLER-LEVEL at the real entry point, at the RIGHT boundary.
 
-    The test above drives `_clear_egress_latch_for_turn` directly, so it passes
-    even if `_handle_message` never calls it. This runs the production
-    `_handle_message` with admission stubbed to ADMIT, and asserts the latch is
-    gone; then with admission stubbed to DROP, and asserts it survives.
+    Teardown previously sat right after `_hm_admit_event`, which is only an
+    ADMISSION gate. An authorized message can be steered into a running
+    session, answer a pending prompt, run a busy slash command, or be refused
+    by the pause/drain gates — all WITHOUT starting a turn. Each of those
+    cleared the ACTIVE turn's refusal, and a later fallback from that turn then
+    reached the wire.
+
+    It now runs only after `_claim_active_session_slot`, the first point the
+    runner owns a new turn.
     """
     from gateway.config import Platform
     from gateway.run_inbound import GatewayInboundMixin
     from gateway.session import SessionSource
 
-    adapter, _ = _latch_adapter({"edit"})
-    asyncio.run(adapter.edit_message("C1", "m1", "SECRET"))
-    assert "C1" in adapter._declined_chats
-
     source = SessionSource(platform=Platform.SLACK, chat_id="C1", user_id="u1")
     event = SimpleNamespace(source=source)
 
+    def _fresh_latched_adapter():
+        adapter, _ = _latch_adapter({"edit"})
+        adapter._platform_by_chat["C1"] = "slack"
+        asyncio.run(adapter.edit_message("C1", "m1", "SECRET"))
+        assert adapter._declined_chats, "probe setup: the decline must latch"
+        return adapter
+
     class _Runner(GatewayInboundMixin):
-        def __init__(self, admit):
+        """Production `_handle_message`, with each non-turn lane switchable."""
+
+        def __init__(self, adapter, *, admit=True, paused=False, running=False):
             self.adapters = {Platform.RELAY: adapter}
-            self._admit = admit
+            self._admit, self._paused, self._running = admit, paused, running
+            self._external_drain_active = False
 
         async def _hm_admit_event(self, ev):
             return (ev, source, False) if self._admit else None
 
         def _hm_estop_gate(self, *a, **kw):
-            return "stop-here"  # end the turn right after teardown
+            return "paused" if self._paused else None
 
-    # DROPPED at admission: the refusal must survive.
-    asyncio.run(_Runner(admit=False)._handle_message(event))
-    assert "C1" in adapter._declined_chats
+        def _session_key_for_source(self, src):
+            return "k1"
 
-    # ADMITTED: teardown runs.
-    asyncio.run(_Runner(admit=True)._handle_message(event))
-    assert "C1" not in adapter._declined_chats
+        async def _hm_pending_reply_intercepts(self, *a, **kw):
+            return None
+
+        def _hm_evict_idle_stale_agent(self, key):
+            return None
+
+        def _hm_evict_reaped_agent(self, key):
+            return None
+
+        def _is_session_running(self, key):
+            return self._running
+
+        async def _hm_handle_running_session_message(self, *a, **kw):
+            return "steered-into-running-turn"
+
+        async def _hm_dispatch_idle_commands(self, *a, **kw):
+            return False, None
+
+        def _is_telegram_topic_root_lobby(self, src):
+            return False
+
+        def _claim_active_session_slot(self, key, src):
+            # Claimed successfully; teardown runs immediately after this, then
+            # the stub below ends the call.
+            return object(), None
+
+        def _hm_rescue_orphaned_fifo(self, ev, src, internal, key):
+            raise _StopTurn
+
+    class _StopTurn(Exception):
+        pass
+
+    # 1. DROPPED at admission — never authorized, must not clear.
+    a1 = _fresh_latched_adapter()
+    asyncio.run(_Runner(a1, admit=False)._handle_message(event))
+    assert a1._declined_chats, "a dropped event cleared the active turn's latch"
+
+    # 2. PAUSED — admitted but no turn started, must not clear.
+    a2 = _fresh_latched_adapter()
+    assert asyncio.run(_Runner(a2, paused=True)._handle_message(event)) == "paused"
+    assert a2._declined_chats, "the pause gate cleared the active turn's latch"
+
+    # 3. BUSY SESSION — steered into the RUNNING turn, must not clear. This is
+    #    the reviewer's probe: the refusal belongs to the turn still in flight.
+    a3 = _fresh_latched_adapter()
+    assert (
+        asyncio.run(_Runner(a3, running=True)._handle_message(event))
+        == "steered-into-running-turn"
+    )
+    assert a3._declined_chats, "busy-session traffic cleared the active turn's latch"
+    # And the suppression it protects still holds.
+    later = asyncio.run(a3.send("C1", "stale content from the refused turn"))
+    assert not later.success
+
+    # 4. GENUINELY NEW TURN — the session slot is claimed, so it must clear.
+    a4 = _fresh_latched_adapter()
+    with pytest.raises(_StopTurn):
+        asyncio.run(_Runner(a4)._handle_message(event))
+    assert not a4._declined_chats, "a new turn did not clear the latch"
 
 
 def test_follow_up_carries_the_structured_decline():
@@ -1208,3 +1274,136 @@ def test_declined_draft_frame_is_terminal_for_the_run():
     assert asyncio.run(consumer2._send_draft_frame("partial")) is False
     assert consumer2._egress_declined is False
     assert consumer2._use_draft_streaming is False
+
+
+# ── round 10 blockers ──────────────────────────────────────────────────────
+
+
+def test_latch_identity_includes_the_logical_platform():
+    """One relay adapter fronts SEVERAL logical platforms, so native ids
+    collide across them.
+
+    Reviewer probe: a Discord refusal for chat `42` was cleared by
+    `clear_egress_latch("telegram", "42")`, and the Discord fallback then
+    reached the connector.
+    """
+    adapter, connector = _latch_adapter({"edit"})
+    adapter._platform_by_chat["42"] = "discord"
+
+    asyncio.run(adapter.edit_message("42", "m1", "secret"))
+    assert adapter._declined_chats
+
+    # WRONG platform: the refusal must survive and the fallback stay blocked.
+    adapter.clear_egress_latch("telegram", "42")
+    assert adapter._declined_chats
+    assert not asyncio.run(adapter.send("42", "fallback")).success
+
+    # RIGHT platform: it clears.
+    adapter.clear_egress_latch("discord", "42")
+    assert not adapter._declined_chats
+
+
+def test_declined_draft_seal_arms_the_latch():
+    """`_seal_open_draft` posts through `_attempt` directly, not `_outbound`,
+    so it never reached `_latch_declined`.
+
+    The immediate plain-send fallback was already suppressed by the caller, but
+    LATER same-turn sends were not: wire was ['draft', 'draft', 'send'] with
+    the third frame carrying content the connector had refused.
+    """
+    descriptor = CapabilityDescriptor(
+        contract_version=CONTRACT_VERSION,
+        platform="slack",  # stream-is-the-message, so a seal is armed
+        label="Relay",
+        max_message_length=4096,
+        supports_draft_streaming=True,
+        supports_edit=True,
+        supports_threads=True,
+        markdown_dialect="plain",
+        len_unit="chars",
+        supported_ops=ALL_OPS,
+    )
+
+    class _SealRefuser(DecliningConnector):
+        async def send_outbound(self, action, *, platform=None):
+            op = str(action.get("op"))
+            self.ops.append(op)
+            if op == "draft" and not action.get("final"):
+                return {"success": True, "message_id": "m1"}
+            return dict(CODE_ONLY_DECLINE)
+
+    connector = _SealRefuser(descriptor)
+    adapter = RelayAdapter(
+        PlatformConfig(enabled=True, extra={}), descriptor, transport=connector
+    )
+
+    asyncio.run(adapter.send_draft("C1", "d1", "partial"))
+    asyncio.run(adapter.send("C1", "later same-turn content"))
+
+    assert adapter._declined_chats
+    assert "send" not in connector.ops
+
+
+def test_ambiguous_draft_result_never_reads_as_a_decline():
+    """AMBIGUOUS is a transport outcome: the frame may well have been
+    delivered, so it must never terminate the run.
+
+    The ambiguous projection discarded `raw_response`, so `declined_send` fell
+    through to the error-text branch — and an ambiguous result whose text
+    happens to carry the decline marker ("... egress declined: ack lost") read
+    as a DEFINITE refusal.
+    """
+    from gateway.relay.egress import declined_send
+
+    descriptor = CapabilityDescriptor(
+        contract_version=CONTRACT_VERSION,
+        platform="discord",
+        label="Relay",
+        max_message_length=4096,
+        supports_draft_streaming=True,
+        supports_edit=True,
+        supports_threads=True,
+        markdown_dialect="plain",
+        len_unit="chars",
+        supported_ops=ALL_OPS,
+    )
+
+    class _Ambiguous(DecliningConnector):
+        async def send_outbound(self, action, *, platform=None):
+            self.ops.append(str(action.get("op")))
+            return {
+                "success": False,
+                "ambiguous": True,
+                "error": "discord egress declined: ack lost",
+            }
+
+    connector = _Ambiguous(descriptor)
+    adapter = RelayAdapter(
+        PlatformConfig(enabled=True, extra={}), descriptor, transport=connector
+    )
+
+    result = asyncio.run(adapter.send_draft("C1", "d1", "partial"))
+
+    assert result.raw_response is not None, "the ambiguous body must be carried"
+    assert result.raw_response.get("ambiguous") is True
+    assert not declined_send(result), "ambiguous must not classify as a decline"
+    # And it must not have latched the chat.
+    assert not adapter._declined_chats
+
+
+def test_declined_send_ignores_ack_lost_text_without_a_structured_body():
+    """DEFENCE IN DEPTH for a projection that loses the `ambiguous` flag.
+
+    The text-only branch cannot see `ambiguous`, so any error text saying the
+    ack was lost is a transport outcome — never authorization.
+    """
+    from gateway.platforms.base import SendResult
+    from gateway.relay.egress import declined_send
+
+    assert not declined_send(
+        SendResult(success=False, error="discord egress declined: ack lost")
+    )
+    # CONTROL: a genuine text-only decline is still detected.
+    assert declined_send(
+        SendResult(success=False, error="egress declined: destination not approved")
+    )

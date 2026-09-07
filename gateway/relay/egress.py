@@ -40,6 +40,11 @@ EGRESS_DECLINE_CODE = "egress_declined"
 # deliberately uninformative (finding F-005) and must not be parsed.
 EGRESS_DECLINE_MARKER = "egress declined:"
 
+# Transport-ambiguity text. A lost ack means the frame MAY have been delivered,
+# so it is never an authorization refusal. Needed because the text-only branch
+# of `declined_send` sees no structured `ambiguous` flag to check.
+_AMBIGUOUS_MARKER = "ack lost"
+
 
 def is_egress_decline(result: Any) -> bool:
     """True when *result* is the connector REFUSING the destination.
@@ -92,7 +97,17 @@ def declined_send(result: Any) -> bool:
     if isinstance(raw, dict):
         return is_egress_decline(raw)
     error = getattr(result, "error", None)
-    return bool(error and is_egress_decline({"success": False, "error": error}))
+    if not error:
+        return False
+    if _AMBIGUOUS_MARKER in str(error).lower():
+        # DEFENCE IN DEPTH for a lost `ambiguous` flag. The text branch exists
+        # only for connectors that send no structured body, so it cannot see
+        # `ambiguous` — and a projection that drops `raw_response` therefore
+        # turned "ack lost" into a definite refusal, terminating the run for a
+        # frame that may well have been delivered. Any error text that says the
+        # ack was lost is treated as a transport outcome, never authorization.
+        return False
+    return is_egress_decline({"success": False, "error": error})
 
 
 def decline_error(result: Any) -> str:

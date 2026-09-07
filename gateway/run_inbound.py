@@ -1199,7 +1199,6 @@ class GatewayInboundMixin:
         # — Discord interaction passthrough builds its own MessageEvent and
         # calls handle_message directly, so a teardown on the relay's inbound
         # handler left those turns muted.
-        self._clear_egress_latch_for_turn(source)
 
         _paused_notice = self._hm_estop_gate(event, source, is_internal)
         if _paused_notice is not None:
@@ -1247,6 +1246,18 @@ class GatewayInboundMixin:
         if _limit_message is not None:
             logger.info("Rejecting new active session %s: max_concurrent_sessions reached", _quick_key)
             return _limit_message
+        # TERMINAL-DECLINE LATCH TEARDOWN — the true NEW-TURN boundary.
+        #
+        # It sat after _hm_admit_event, which is only an ADMISSION gate: an
+        # authorized message can be steered into a running session, answer a
+        # pending prompt, run a busy slash command, or be refused by the pause
+        # or drain gates, all WITHOUT starting a turn. Each of those cleared the
+        # active turn's refusal, and a later fallback from that same turn then
+        # reached the wire (probe: latch emptied, wire ops ['edit', 'send']).
+        #
+        # The session slot is the first point the runner OWNS a new turn: every
+        # non-turn lane above has already returned, and the lease is claimed.
+        self._clear_egress_latch_for_turn(source)
 
         event, source, is_internal = self._hm_rescue_orphaned_fifo(event, source, is_internal, _quick_key)
 
