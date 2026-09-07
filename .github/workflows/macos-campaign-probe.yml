@@ -22,3 +22,5 @@ jobs:
           uname -a
           uv run --no-sync python -c 'import platform; print(platform.platform(), platform.machine())'
           scripts/run_tests.sh -j 1 tests/hermes_cli/test_serve_parent_watchdog_live_macos.py
+      - name: Real backend READY HTTP profiles and WebSocket control
+        run: node --experimental-strip-types evals/desktop_bug_campaign/native_ready_probe.mjs
