@@ -32,6 +32,10 @@ When you run `hermes update`, the following steps occur:
 6. **Desktop rebuild (stage-and-swap)** — if the Hermes Desktop app was built from this checkout, it is rebuilt so the GUI matches the new code. The rebuild packs into a temporary staging directory next to `apps/desktop/release/`, verifies the staged app, and only then renames it over the previous build. A rebuild that fails at any point — corrupt Electron download, missing dependency, disk full — leaves the previous app untouched and launchable; the update reports `⚠ Update partially complete` and `hermes desktop` retries the rebuild.
 7. **Gateway auto-restart** — running gateways are refreshed after the update completes so the new code takes effect immediately. Service-managed gateways (systemd on Linux, launchd on macOS) are restarted through the service manager. Manual gateways are relaunched automatically when Hermes can map the running PID back to a profile. Manually-launched `hermes serve` / `hermes dashboard` backends (for example a network-bound serve powering a remote Desktop) are handled the same way: each backend records its bind address in the install's spawn ledger at startup, so the update stops it before the code swap and relaunches it afterward on the **same host and port** — a remote Desktop pointed at that endpoint reconnects instead of stranding. Backends owned by a running Desktop app are left to the app's own respawn.
 
+### Desktop update progress logs
+
+Desktop-driven updates also mirror output to `logs/update.log` under the active Hermes home. Desktop build subprocess output is written there as lines arrive, without flooding the terminal. This lets the Windows updater observe a progressing build before it exits. A genuinely silent or stalled child can still hit the idle watchdog; the log is not a process-liveness heartbeat.
+
 ### Updating against a non-default branch: `--branch`
 
 By default `hermes update` tracks `origin/main`. Pass `--branch <name>` to update against a different branch — useful for QA channels, feature branches, or release-candidate testing:

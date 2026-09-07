@@ -100,7 +100,8 @@ class TestUpdateOutputStream:
 class TestInstallHangupProtection:
 
 
-    def test_wraps_stdout_and_stderr_with_mirror(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("gateway_mode", [False, True])
+    def test_wraps_stdout_and_stderr_with_mirror(self, tmp_path, monkeypatch, gateway_mode):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         # Nuke any cached home path
         import hermes_cli.config as _cfg
@@ -108,7 +109,7 @@ class TestInstallHangupProtection:
             _cfg._HERMES_HOME_CACHE = None  # type: ignore[attr-defined]
 
         prev_out, prev_err = sys.stdout, sys.stderr
-        state = _install_hangup_protection(gateway_mode=False)
+        state = _install_hangup_protection(gateway_mode=gateway_mode)
 
         try:
             # On Windows (no SIGHUP) we still wrap stdio and create the log.
@@ -216,6 +217,35 @@ class TestLogOnlyWrite:
 
 
 class TestRunLoggedSubprocess:
+    def test_progress_reaches_log_before_child_exits(self, tmp_path, monkeypatch):
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+
+        release = tmp_path / "release"
+        path = tmp_path / "update.log"
+        terminal = io.StringIO()
+        child = (
+            "import pathlib,sys,time\nprint('building',flush=True)\n"
+            "p=pathlib.Path(sys.argv[1]); deadline=time.monotonic()+20\n"
+            "while not p.exists() and time.monotonic()<deadline: time.sleep(.02)\n"
+            "print('finished',file=sys.stderr,flush=True)\nsys.exit(7)\n"
+        )
+        with path.open("w", encoding="utf-8") as log, ThreadPoolExecutor(1) as pool:
+            monkeypatch.setattr(sys, "stdout", _UpdateOutputStream(terminal, log))
+            future = pool.submit(_run_logged_subprocess, [sys.executable, "-u", "-c", child, str(release)])
+            try:
+                deadline = time.monotonic() + 5
+                while "building" not in path.read_text(encoding="utf-8") and time.monotonic() < deadline:
+                    time.sleep(.02)
+                assert "building" in path.read_text(encoding="utf-8")
+                assert not future.done()
+            finally:
+                release.touch()
+            result = future.result(timeout=10)
+        assert result.returncode == 7
+        assert result.stdout == path.read_text(encoding="utf-8") == "building\nfinished\n"
+        assert terminal.getvalue() == ""
+
     def test_captures_output_to_log_only(self, monkeypatch):
         terminal = io.StringIO()
         log = io.StringIO()
