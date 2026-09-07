@@ -36,6 +36,10 @@ When you run `hermes update`, the following steps occur:
 
 Desktop-driven updates also mirror output to `logs/update.log` under the active Hermes home. Desktop build subprocess output is written there as lines arrive, without flooding the terminal. This lets the Windows updater observe a progressing build before it exits. A genuinely silent or stalled child can still hit the idle watchdog; the log is not a process-liveness heartbeat.
 
+### Missing Windows updater files
+
+If the maintained updater script is missing (for example after antivirus quarantine), the legacy update forwarder fails instead of reporting a successful hand-off. Repair the installation and review the security software's quarantine report before retrying; do not disable antivirus protection. This prerequisite check does not verify a completed desktop build.
+
 ### Updating against a non-default branch: `--branch`
 
 By default `hermes update` tracks `origin/main`. Pass `--branch <name>` to update against a different branch — useful for QA channels, feature branches, or release-candidate testing:
