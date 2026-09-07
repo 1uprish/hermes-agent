@@ -1,4 +1,6 @@
 """Ephemeral native A/B: real packaged Hermes, controlled updater child."""
+import ctypes
+from ctypes import wintypes
 import hashlib
 import json
 import os
@@ -37,13 +39,29 @@ shutil.copytree(source, live)
 (install / '.gitignore').write_text('apps/desktop/release/\n', encoding='utf-8')
 (HOME / 'desktop-build-stamp.json').write_text(json.dumps(dict(contentHash=_compute_desktop_content_hash(install), sourceMode=False)), encoding='utf-8')
 targets = {'corrupt-asar': live / 'resources/app.asar', 'empty-index': live / 'resources/app.asar.unpacked/dist/index.html', 'unreadable-index': live / 'resources/app.asar.unpacked/dist/index.html', 'empty-main': live / 'resources/app.asar.unpacked/dist/electron-main.mjs'}
+targets['locked-index'] = live / 'resources/app.asar.unpacked/dist/index.html'
+kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+kernel.CreateFileW.restype = wintypes.HANDLE
+kernel.CloseHandle.argtypes = [wintypes.HANDLE]
 for leg, code in [('before', old), ('after', new)]:
     (package / 'desktop_update_verify.py').write_bytes(code)
     shutil.rmtree(package / '__pycache__', ignore_errors=True)
     for mode in ['packaged-positive', *targets, 'dependency-recovery', 'refused']:
         target = targets.get(mode)
         saved = target.read_bytes() if target else None
-        if target: target.write_bytes(b'bad asar' if mode == 'corrupt-asar' else b'\xff' if mode == 'unreadable-index' else b'')
+        handle = None
+        if mode == 'locked-index':
+            handle = kernel.CreateFileW(str(target), 0x80000000, 0, None, 3, 0x80, None)
+            assert handle not in (None, ctypes.c_void_p(-1).value), ctypes.get_last_error()
+            try:
+                target.read_bytes()
+            except PermissionError:
+                pass
+            else:
+                raise AssertionError('exclusive index lock did not deny reads')
+        elif target:
+            target.write_bytes(b'bad asar' if mode == 'corrupt-asar' else b'\xff' if mode == 'unreadable-index' else b'')
         if mode == 'dependency-recovery': (install / 'dependency-broken').touch()
         if mode == 'refused': (install / 'refused').touch()
         (install / 'update-ran').unlink(missing_ok=True)
@@ -56,6 +74,9 @@ for leg, code in [('before', old), ('after', new)]:
         rows.append(dict(leg=leg, mode=mode, exit=p.returncode, receipt=receipt, expected=expected, update_ran=(install / 'update-ran').exists(), passed=p.returncode == expected and receipt is not None and receipt['ok'] == (expected == 0)))
         (OUT / 'real-artifact-matrix.json').write_text(json.dumps(rows, indent=2), encoding='utf-8')
         print(json.dumps(rows[-1]), flush=True)
-        if target: target.write_bytes(saved)
+        if handle is not None: kernel.CloseHandle(handle)
+        if target:
+            assert saved is not None
+            target.write_bytes(saved)
         (install / 'refused').unlink(missing_ok=True)
-assert len(rows) == 14 and all(r['passed'] for r in rows)
+assert len(rows) == 16 and all(r['passed'] for r in rows)
