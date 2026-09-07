@@ -243,6 +243,17 @@ class GatewayStatusCommandsMixin:
             lines.append(t("gateway.status.model_provider", model=model_name, provider=provider_name))
         elif model_name:
             lines.append(t("gateway.status.model", model=model_name))
+        try:
+            from hermes_cli.auth import resolve_provider
+            from hermes_cli.anon_auth import guest_carries_inference
+
+            free_tier_active = await self._run_in_executor_with_context(
+                lambda: resolve_provider("auto") == "nous" and guest_carries_inference()
+            )
+            if free_tier_active:
+                lines.append(t("gateway.status.free_tier"))
+        except Exception:
+            pass
         if context_total:
             pct = min(100, round((context_used / context_total) * 100))
             lines.append(t("gateway.status.context", used=_fmt(context_used), total=_fmt(context_total),
