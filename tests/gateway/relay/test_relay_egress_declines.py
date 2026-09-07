@@ -729,3 +729,84 @@ def test_declined_stream_edit_does_not_send_the_unseen_tail():
 
     # Terminal for the run: the tail must not be re-sent anywhere.
     assert consumer._egress_declined is True
+
+
+# ── the terminal-decline latch (the structural fix) ─────────────────────────
+
+
+def _latch_adapter(refuse_ops):
+    descriptor = CapabilityDescriptor(
+        contract_version=CONTRACT_VERSION,
+        platform="slack",
+        label="Relay",
+        max_message_length=4096,
+        supports_draft_streaming=True,
+        supports_edit=True,
+        supports_threads=True,
+        markdown_dialect="plain",
+        len_unit="chars",
+        supported_ops=ALL_OPS,
+    )
+
+    class _Selective(DecliningConnector):
+        async def send_outbound(self, action, *, platform=None):
+            op = str(action.get("op"))
+            self.ops.append(op)
+            if op in refuse_ops:
+                return dict(CODE_ONLY_DECLINE)
+            return {"success": True, "message_id": "m1"}
+
+    connector = _Selective(descriptor)
+    adapter = RelayAdapter(
+        PlatformConfig(enabled=True, extra={}), descriptor, transport=connector
+    )
+    return adapter, connector
+
+
+def test_a_declined_chat_stops_emitting_content_frames():
+    """Eleven lanes had the same defect, so the fix belongs at the choke point.
+
+    Every relay frame from every caller passes through `send_outbound`. Once
+    the connector refuses a chat, no later CONTENT op for that chat reaches the
+    wire — which holds even when a caller forgets its local check, and there
+    are ~60 outbound call sites in gateway/.
+    """
+    adapter, connector = _latch_adapter({"edit"})
+
+    asyncio.run(adapter.edit_message("C1", "m1", "SECRET"))
+    asyncio.run(adapter.send("C1", "SECRET"))
+
+    assert connector.ops == ["edit"]
+
+
+def test_the_latch_is_per_chat():
+    """A refusal must never mute an unrelated conversation."""
+    adapter, connector = _latch_adapter({"edit"})
+
+    asyncio.run(adapter.edit_message("C1", "m1", "x"))
+    asyncio.run(adapter.send("C2", "hello"))
+
+    assert "send" in connector.ops
+
+
+def test_the_latch_clears_when_the_connector_accepts_again():
+    """A transient policy change must self-heal, not need a restart."""
+    adapter, connector = _latch_adapter({"edit"})
+
+    asyncio.run(adapter.edit_message("C1", "m1", "x"))
+    asyncio.run(adapter.send("C1", "blocked"))
+    adapter._clear_declined("C1")
+    asyncio.run(adapter.send("C1", "allowed"))
+
+    assert connector.ops.count("send") == 1
+
+
+def test_cosmetic_ops_are_not_latched():
+    """Typing/delete carry no content; latching them would break housekeeping
+    (a stuck typing indicator) for no security gain."""
+    adapter, connector = _latch_adapter({"send"})
+
+    asyncio.run(adapter.send("C1", "SECRET"))
+    asyncio.run(adapter.send_typing("C1"))
+
+    assert "typing" in connector.ops

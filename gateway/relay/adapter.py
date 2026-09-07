@@ -25,7 +25,12 @@ from gateway.platforms.base import (
     BasePlatformAdapter, MessageEvent, MessageType, ProcessingOutcome, SendResult,
 )
 from gateway.relay.descriptor import CapabilityDescriptor
-from gateway.relay.egress import decline_error, is_egress_decline, log_decline
+from gateway.relay.egress import (
+    EGRESS_DECLINE_CODE,
+    decline_error,
+    is_egress_decline,
+    log_decline,
+)
 from gateway.relay.media import RelayMediaClient
 from gateway.relay.transport import RelayTransport
 from gateway.session import SessionSource
@@ -118,6 +123,8 @@ class RelayAdapter(BasePlatformAdapter):
         # platforms on one WS and a reply must egress through the platform the
         # inbound came from. Empty for a single-platform gateway (connector default).
         self._platform_by_chat: Dict[str, str] = {}
+        # Chats the connector has refused (see the terminal-decline latch).
+        self._declined_chats: set[str] = set()
         # chat_id -> (thread_id, initial_name) of the auto-thread the CONNECTOR
         # created for our latest send; read by the semantic thread-rename lane.
         self._auto_thread_by_chat: Dict[str, Tuple[str, str]] = {}
@@ -352,6 +359,40 @@ class RelayAdapter(BasePlatformAdapter):
             return candidates[0]
         return None
 
+    # ── terminal-decline latch ──────────────────────────────────────────────
+    #
+    # THE STRUCTURAL FIX. Rounds 3-6 of review found the SAME defect in eleven
+    # lanes: the connector refuses one op, and some caller downstream reads that
+    # as "this lane is unavailable" and retries the same content through a
+    # DIFFERENT op against the SAME chat. Each was closed with a local check at
+    # one more call site — but there are ~60 outbound call sites in gateway/,
+    # and a per-site check is a race between reviewers and new code.
+    #
+    # Every relay frame, from every one of those callers, passes through
+    # `_transport.send_outbound`. One latch here covers them all: once the
+    # connector has refused a chat, this adapter stops emitting content frames
+    # for that chat until the latch is cleared.
+    #
+    # Scope is deliberately narrow:
+    #   * per CHAT, not global — a refusal must not mute other conversations;
+    #   * CONTENT ops only — typing/delete/read-state carry nothing and their
+    #     refusal is already silent;
+    #   * cleared when the connector accepts anything for that chat again, so a
+    #     transient policy change self-heals rather than needing a restart.
+    _DECLINE_LATCHED_OPS = frozenset(
+        {"send", "edit", "draft", "send_media", "prompt", "task_card", "task_card_stop"}
+    )
+
+    def _latch_declined(self, chat_id: Any, op: str) -> None:
+        if op in self._DECLINE_LATCHED_OPS:
+            self._declined_chats.add(str(chat_id))
+
+    def _clear_declined(self, chat_id: Any) -> None:
+        self._declined_chats.discard(str(chat_id))
+
+    def _is_latched(self, chat_id: Any, op: str) -> bool:
+        return op in self._DECLINE_LATCHED_OPS and str(chat_id) in self._declined_chats
+
     async def _outbound(self, chat_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
         """Send one outbound frame tagged with the chat's underlying platform.
 
@@ -361,11 +402,22 @@ class RelayAdapter(BasePlatformAdapter):
         indistinguishable from "op unsupported" in the logs. The return
         contract is unchanged; the refusal is recorded.
         """
+        op = str(action.get("op", "?"))
+        if self._is_latched(chat_id, op):
+            return {
+                "success": False,
+                "code": EGRESS_DECLINE_CODE,
+                "error": "egress declined: destination refused earlier in this turn",
+            }
         result = await self._transport.send_outbound(  # type: ignore[union-attr]
             action, platform=self._platform_by_chat.get(str(chat_id))
         )
-        if isinstance(result, dict) and not result.get("success") and is_egress_decline(result):
-            log_decline(action.get("op", "?"), chat_id, result)
+        if isinstance(result, dict):
+            if not result.get("success") and is_egress_decline(result):
+                log_decline(op, chat_id, result)
+                self._latch_declined(chat_id, op)
+            elif result.get("success"):
+                self._clear_declined(chat_id)
         return result
 
     async def _gated_op(
@@ -387,6 +439,13 @@ class RelayAdapter(BasePlatformAdapter):
         op = action["op"]
         if self._transport is None or not self.descriptor.supports_op(op):
             return None
+        if self._is_latched(chat_id, op):
+            latched = {
+                "success": False,
+                "code": EGRESS_DECLINE_CODE,
+                "error": "egress declined: destination refused earlier in this turn",
+            }
+            return latched if surface_declines else None
         try:
             result = await self._transport.send_outbound(
                 action, platform=platform or self._platform_by_chat.get(str(chat_id))
@@ -410,6 +469,7 @@ class RelayAdapter(BasePlatformAdapter):
                 # degrade to None, but a silent degrade made a security refusal
                 # indistinguishable from "op unsupported" in the logs.
                 log_decline(op, chat_id if subject is None else subject, result)
+                self._latch_declined(chat_id, op)
                 if surface_declines:
                     return result
                 return None
@@ -419,6 +479,7 @@ class RelayAdapter(BasePlatformAdapter):
                     op, chat_id if subject is None else subject, result.get("error"),
                 )
             return None
+        self._clear_declined(chat_id)
         return result
 
     def _text_metadata(self, chat_id: str, metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
