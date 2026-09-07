@@ -1,80 +1,65 @@
-name: Windows venv-holder live E2E
-
-# ON-DEMAND ONLY (fleet-update #91277, venv-holder consolidation work).
-#
-# Runs the live venv-holder E2E suite on a real windows-latest runner:
-# spawns actual processes with realistic Hermes argv shapes and drives the
-# REAL detection/classification/exemption code against the live process
-# table — the coverage that cannot exist on the Linux lanes and that the
-# maintainer cannot exercise locally before the work reaches main.
-#
-# Deliberately NOT wired to pull_request/main: it fires only on pushes to
-# wine2e/** working branches, so it costs nothing on normal PRs. Delete or
-# keep dormant after the venv-holder work lands.
-
+name: Windows campaign 74848 probes (ephemeral)
 on:
   push:
-    branches:
-      - "wine2e/**"
-
+    branches: [wine2e/desktop-74848-windows]
 permissions:
   contents: read
-
-concurrency:
-  group: windows-venv-e2e-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  venv-holder-e2e:
-    name: venv-holder live E2E (windows-latest)
+  mechanisms:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
-      - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          version: "0.9.28"
-          enable-cache: true
-          cache-dependency-glob: |
-            pyproject.toml
-            uv.lock
-
-      - name: Set up Python 3.11
-        uses: ./.github/actions/retry
+          persist-credentials: false
+        timeout-minutes: 2
+      - name: Probe dependencies
+        shell: pwsh
+        timeout-minutes: 3
+        run: python -m pip install python-dotenv==1.2.1 PyYAML==6.0.3 psutil==7.2.2 rich==14.3.3 packaging==25.0 httpx==0.28.1 requests==2.32.5 platformdirs==4.9.4
+      - name: Native mechanisms on unchanged production
+        shell: pwsh
+        timeout-minutes: 6
+        run: python evals/desktop_bug_campaign/windows_probe.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        timeout-minutes: 2
         with:
-          command: uv python install 3.11
-
-      - name: Install dependencies
-        uses: ./.github/actions/retry
+          name: mechanisms
+          path: windows-evidence/
+  staging:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          command: uv sync --locked --python 3.11 --extra dev --extra messaging
-
-      - name: Run venv-holder live E2E
-        shell: bash
+          persist-credentials: false
+        timeout-minutes: 2
+      - name: Exact reporter Node
+        shell: pwsh
+        timeout-minutes: 3
         run: |
-          set -uo pipefail
-          uv run --no-sync python -m pytest \
-            tests/hermes_cli/test_venv_holder_windows_live.py \
-            tests/hermes_cli/test_taskkill_identity_windows_live.py \
-            tests/hermes_cli/test_git_trampoline_windows_live.py \
-            "tests/hermes_cli/test_managed_uv.py::TestWindowsRuntimeSelfLock" \
-            -o addopts= -v -p no:cacheprovider
-
-      - name: Run Telegram CLOSE-WAIT reconnect live E2E (#87057)
-        shell: bash
+          Invoke-WebRequest https://nodejs.org/dist/v22.23.2/node-v22.23.2-win-x64.zip -OutFile "$env:RUNNER_TEMP/node.zip"
+          Expand-Archive "$env:RUNNER_TEMP/node.zip" "$env:RUNNER_TEMP/node"
+          "$env:RUNNER_TEMP/node/node-v22.23.2-win-x64" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Fresh dependencies and actual native staging
+        shell: pwsh
+        timeout-minutes: 13
         run: |
-          set -uo pipefail
-          uv run --no-sync python -m pytest \
-            tests/gateway/test_telegram_closewait_windows_live.py \
-            -o addopts= -v -p no:cacheprovider
-
-      - name: Run background-executor spawn parity live E2E (#70716)
-        shell: bash
-        run: |
-          set -uo pipefail
-          uv run --no-sync python -m pytest \
-            tests/tools/test_process_registry_windows_live.py \
-            -o addopts= -v -p no:cacheprovider
+          New-Item -ItemType Directory windows-evidence -Force
+          node --version
+          npm.cmd ci --no-audit --no-fund *> windows-evidence/npm.log
+          $npmCode = $LASTEXITCODE
+          "npm_exit=$npmCode"
+          if ($npmCode -ne 0) { exit $npmCode }
+          node apps/desktop/scripts/stage-native-deps.mjs *> windows-evidence/staging.log
+          $stageCode = $LASTEXITCODE
+          "staging_exit=$stageCode" | Tee-Object windows-evidence/staging-result.txt
+          Get-Content windows-evidence/staging.log
+          exit $stageCode
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        timeout-minutes: 2
+        with:
+          name: staging
+          path: windows-evidence/
