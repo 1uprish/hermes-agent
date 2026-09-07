@@ -16,11 +16,13 @@ jobs:
       - name: Probe dependencies
         shell: pwsh
         timeout-minutes: 3
-        run: python -m pip install python-dotenv==1.2.1 PyYAML==6.0.3 psutil==7.2.2 rich==14.3.3 packaging==25.0 httpx==0.28.1 requests==2.32.5 platformdirs==4.9.4
+        run: python -m pip install python-dotenv==1.2.1 PyYAML==6.0.3 psutil==7.2.2 rich==14.3.3 packaging==25.0 httpx==0.28.1 requests==2.32.5 platformdirs==4.9.4 pathspec==0.12.1
       - name: Native mechanisms on unchanged production
         shell: pwsh
         timeout-minutes: 6
-        run: python evals/desktop_bug_campaign/windows_probe.py
+        run: |
+          python evals/desktop_bug_campaign/windows_probe.py
+          python evals/desktop_bug_campaign/windows_receipt_matrix.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         timeout-minutes: 2
