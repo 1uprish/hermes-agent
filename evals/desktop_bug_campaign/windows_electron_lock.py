@@ -17,7 +17,10 @@ from hermes_cli.main_desktop import _swap_staged_desktop_app
 out = ROOT / 'windows-evidence'
 desktop = HOME / 'apps/desktop'
 live = desktop / 'release/win-unpacked'
-electron_dist = ROOT / 'node_modules/electron/dist'
+electron_package = Path(subprocess.check_output(['node', '-p', "require.resolve('electron/package.json')"], cwd=ROOT / 'apps/desktop', stdin=subprocess.DEVNULL, text=True).strip()).parent
+if not (electron_package / 'dist/electron.exe').is_file():
+    subprocess.run(['node', str(electron_package / 'install.js')], cwd=electron_package, stdin=subprocess.DEVNULL, check=True, timeout=120)
+electron_dist = electron_package / 'dist'
 shutil.copytree(electron_dist, live)
 (live / 'electron.exe').rename(live / 'Hermes.exe')
 app = HOME / 'fixture.cjs'
