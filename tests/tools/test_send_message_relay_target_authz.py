@@ -370,3 +370,59 @@ def test_missing_gateway_package_still_allows(relay_env, monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", _no_gateway)
     assert smt._authorize_relay_target("discord", ARBITRARY_CHAT) is None
+
+
+# ── fail-open boundaries: ABSENCE is not FAULT ─────────────────────────────
+
+
+def test_route_discovery_fault_refuses_rather_than_authorizing(relay_env, monkeypatch):
+    """A fault while determining relay routing must DENY, not fall through.
+
+    `_relay_fronted` used to swallow every exception and return an empty set,
+    which `relay_routed_platform` reads as "not relay-routed" — skipping the
+    guard entirely. Review injected a discovery fault and watched an
+    unattested target get authorized.
+    """
+    import gateway.relay as gr
+    from tools.send_message_tool import _authorize_relay_target
+
+    def boom():
+        raise RuntimeError("config unreadable while listing fronted platforms")
+
+    monkeypatch.setattr(gr, "relay_fronted_platforms", boom)
+    denial = _authorize_relay_target("discord", "999")
+    assert denial is not None
+    assert "could not be" in denial
+
+
+def test_missing_relay_module_still_authorizes(relay_env, monkeypatch):
+    """The converse: genuine ABSENCE must keep working (no gateway ⇒ no relay).
+
+    Without this, "fail closed on faults" would silently become "refuse
+    everything in CLI/cron contexts", which is the outage the original broad
+    except was there to avoid.
+    """
+    import gateway.relay as gr
+    from tools.send_message_tool import _authorize_relay_target
+
+    monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: set())
+    assert _authorize_relay_target("discord", "999") is None
+
+
+def test_relay_module_import_fault_refuses(monkeypatch):
+    """A module that EXISTS but fails to import is a fault, not an absence."""
+    import builtins
+
+    import tools.send_message_tool as smt
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **kw):
+        if name == "gateway.relay.egress":
+            raise RuntimeError("broken dependency inside an installed gateway")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    denial = smt._authorize_relay_target("discord", "999")
+    assert denial is not None
+    assert "could not be" in denial

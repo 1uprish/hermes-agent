@@ -79,9 +79,25 @@ def _authorize_relay_target(platform_name: str, chat_id) -> str | None:
     """
     try:
         from gateway.relay.egress import authorize_relay_target
-    except Exception:  # noqa: BLE001 - no gateway package ⇒ no relay egress
+    except ImportError:
+        # ABSENCE ONLY. No gateway package means there is no relay egress to
+        # authorize, so proceeding is correct. A broad `except Exception` here
+        # also swallowed module-INITIALIZATION faults — a broken dependency
+        # inside an installed gateway — and returned None, which means
+        # "authorized". Review injected a non-ImportError import failure and
+        # watched an unattested send go through.
         logger.debug("relay target authorization unavailable", exc_info=True)
         return None
+    except Exception:  # noqa: BLE001 - the module is THERE and broke; FAIL CLOSED
+        logger.exception(
+            "relay egress module failed to import for %s — refusing the send",
+            platform_name,
+        )
+        return (
+            f"Refusing to send to relay target '{platform_name}': the egress "
+            "authorization module could not be loaded, so this destination "
+            "could not be verified."
+        )
 
     try:
         return authorize_relay_target(platform_name, chat_id)

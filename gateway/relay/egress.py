@@ -94,13 +94,38 @@ def log_decline(op: str, chat_id: Any, result: Any) -> None:
 # (a) target attestation
 # ---------------------------------------------------------------------------
 
+class RelayRouteUnknown(RuntimeError):
+    """Relay routing could not be determined — callers must FAIL CLOSED.
+
+    Distinct from "no relay is configured", which is an empty set and means the
+    guard does not apply. This is "we could not find out", and the two must not
+    share a return value: an empty set here says "not relay-routed", which
+    skips authorization entirely.
+    """
+
+
 def _relay_fronted() -> Set[str]:
+    """Platforms the connector fronts for this gateway.
+
+    ABSENCE vs FAULT is the whole point of the split below. No gateway relay
+    module means there is no relay egress to authorize, so an empty set is the
+    honest answer. Any OTHER failure — a config read that raised, a broken
+    dependency inside the module — means routing is UNKNOWN, and returning an
+    empty set there silently reclassifies a relay platform as native and
+    bypasses the guard. Review demonstrated exactly that: with discovery
+    raising, an unattested target was authorized.
+    """
     try:
         from gateway.relay import relay_fronted_platforms
-
-        return {str(p) for p in relay_fronted_platforms()}
-    except Exception:  # noqa: BLE001 - env/config absence must never break a send
+    except ImportError:  # no gateway relay module ⇒ no relay egress
         return set()
+
+    try:
+        return {str(p) for p in relay_fronted_platforms()}
+    except Exception as exc:  # noqa: BLE001 - routing unknown; never assume native
+        raise RelayRouteUnknown(
+            f"relay route discovery failed: {exc}"
+        ) from exc
 
 
 def _has_live_native_adapter(platform_name: str) -> bool:
@@ -233,7 +258,23 @@ def authorize_relay_target(platform_name: str, chat_id: Any) -> Optional[str]:
     ``None`` means the send may proceed. Non-relay platforms are never
     restricted here — their own adapters own their authorization.
     """
-    if not relay_routed_platform(platform_name):
+    try:
+        routed = relay_routed_platform(platform_name)
+    except RelayRouteUnknown as exc:
+        # Routing could not be determined. "Not relay-routed" would skip this
+        # guard entirely, so an unknown route must refuse rather than assume
+        # the safe-looking default. Returned as a refusal string (not raised)
+        # because every caller treats this function's output as the verdict.
+        logger.warning(
+            "relay routing unknown for %s — refusing the send: %s",
+            platform_name,
+            exc,
+        )
+        return (
+            f"Refusing to send to '{platform_name}': relay routing could not "
+            "be determined, so this destination could not be verified."
+        )
+    if not routed:
         return None
     target = str(chat_id or "").strip()
     if not target:

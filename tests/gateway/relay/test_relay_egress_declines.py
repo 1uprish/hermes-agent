@@ -443,3 +443,90 @@ def test_username_like_but_not_prefixed_is_guarded(monkeypatch):
     """No `@`, no exemption — a bare name is still an unattested target."""
     eg = _relay_env(monkeypatch)
     assert eg.authorize_relay_target("telegram", "some_public_channel") is not None
+
+
+# ── code-only declines: the wire shape that has NO marker colon ─────────────
+#
+# Review's finding: every case above declines with marker TEXT, so deleting
+# `raw_response=result` from the production return path left all 34 tests
+# green. The structured `code` is documented as the PREFERRED signal precisely
+# because a connector may send no prose at all, and a caller that rebuilds
+# `{"success": False, "error": ...}` from `error` alone cannot see it.
+
+CODE_ONLY_DECLINE: Dict[str, Any] = {"success": False, "code": EGRESS_DECLINE_CODE}
+
+
+class CodeOnlyDecliningConnector(DecliningConnector):
+    """Refuses with a structured code and NO error prose."""
+
+    async def send_outbound(
+        self, action: Dict[str, Any], *, platform: Optional[str] = None
+    ) -> Dict[str, Any]:
+        self.ops.append(str(action.get("op")))
+        return dict(CODE_ONLY_DECLINE)
+
+
+@pytest.fixture
+def code_only_relay():
+    descriptor = CapabilityDescriptor(
+        contract_version=CONTRACT_VERSION,
+        platform="discord",
+        label="Relay",
+        max_message_length=4096,
+        supports_draft_streaming=True,
+        supports_edit=True,
+        supports_threads=True,
+        markdown_dialect="plain",
+        len_unit="chars",
+        supported_ops=ALL_OPS,
+    )
+    connector = CodeOnlyDecliningConnector(descriptor)
+    adapter = RelayAdapter(
+        PlatformConfig(enabled=True, extra={}), descriptor, transport=connector
+    )
+    return adapter, connector
+
+
+def test_code_only_prompt_decline_reaches_the_caller_as_a_decline(code_only_relay):
+    """The REAL adapter's SendResult must carry the structured decline through.
+
+    Drives the production `send_exec_approval` -> `_send_prompt` path and feeds
+    its real SendResult to the real `_approval_send_outcome`, rather than
+    hand-building a SimpleNamespace. With `raw_response` dropped, the verdict
+    degrades to "failed" — the cue that triggers the text fallback into the
+    chat the connector just refused.
+    """
+    from gateway.run import _approval_send_outcome
+
+    adapter, connector = code_only_relay
+    result = asyncio.run(
+        adapter.send_exec_approval("C1", "rm -rf /", "sk1", description="danger")
+    )
+
+    assert result is not None
+    assert result.success is False
+    assert connector.ops == ["prompt"]
+    # The structured body must survive to the caller.
+    assert isinstance(result.raw_response, dict)
+    assert is_egress_decline(result.raw_response)
+
+    class _Fut:
+        def result(self, timeout=None):
+            return result
+
+    assert _approval_send_outcome(_Fut(), timeout=1) == "declined"
+    # A prompt that never rendered must not stay pending.
+    assert adapter._pending_prompts == {}
+
+
+def test_code_only_media_decline_does_not_fall_back(code_only_relay):
+    """Same wire shape on the media lane: a failed lane, never a silent None."""
+    adapter, connector = code_only_relay
+    result = asyncio.run(
+        adapter.send_image("C1", "https://example.invalid/a.png", caption="hi")
+    )
+    assert result is not None
+    assert result.success is False
+    assert connector.ops == ["send_media"]
+    assert isinstance(result.raw_response, dict)
+    assert is_egress_decline(result.raw_response)
