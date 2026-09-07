@@ -1,0 +1,24 @@
+name: macOS desktop watchdog campaign probe
+on:
+  push:
+    branches: ['macose2e/desktop-74848-linux-macos']
+permissions:
+  contents: read
+jobs:
+  native-watchdog:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: '0.9.28'
+      - name: Install locked test dependencies
+        run: uv sync --locked --python 3.11 --extra all --extra dev
+      - name: Native parent-watchdog control (not full issue 103792)
+        run: |
+          uname -a
+          uv run --no-sync python -c 'import platform; print(platform.platform(), platform.machine())'
+          scripts/run_tests.sh -j 1 tests/hermes_cli/test_serve_parent_watchdog_live_macos.py
