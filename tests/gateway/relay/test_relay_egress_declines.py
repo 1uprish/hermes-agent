@@ -845,3 +845,101 @@ def test_latch_covers_the_edit_to_send_lanes_without_a_local_check(lane):
     asyncio.run(adapter.send("C1", "CONTENT"))
 
     assert connector.ops == ["edit"], lane
+
+
+# ── holes found by attacking the latch itself ──────────────────────────────
+
+
+def test_send_for_platform_is_latched():
+    """`send_for_platform` builds and posts its frame DIRECTLY.
+
+    It does not go through `_outbound`, so it did not inherit the latch — and
+    it is the delivery resolver's own entry point, i.e. the single most
+    important caller. Measured leaking before the fix: ops ['edit', 'send'].
+    """
+    from gateway.config import Platform
+
+    adapter, connector = _latch_adapter({"edit"})
+    connector._identities = [("slack", "b1")]
+
+    asyncio.run(adapter.edit_message("C1", "m1", "SECRET"))
+    asyncio.run(adapter.send_for_platform(Platform.SLACK, "C1", "SECRET"))
+
+    assert connector.ops == ["edit"]
+
+
+def test_a_cosmetic_success_does_not_clear_the_latch():
+    """Typing is routinely ALLOWED for a chat whose content is refused.
+
+    Clearing on any success let a typing frame re-open the door for the very
+    next send: ops were ['edit', 'typing', 'send'].
+    """
+    adapter, connector = _latch_adapter({"edit"})
+
+    asyncio.run(adapter.edit_message("C1", "m1", "SECRET"))
+    asyncio.run(adapter.send_typing("C1"))
+    asyncio.run(adapter.send("C1", "SECRET"))
+
+    assert connector.ops == ["edit", "typing"]
+
+
+def test_a_thread_inside_a_refused_chat_is_latched():
+    """A thread lives INSIDE its parent, so the same content would reach the
+    same conversation one level down: ops were ['edit', 'send']."""
+    adapter, connector = _latch_adapter({"edit"})
+
+    asyncio.run(adapter.edit_message("C1", "m1", "SECRET"))
+    asyncio.run(adapter.send("C1:99", "SECRET"))
+
+    assert connector.ops == ["edit"]
+
+
+def test_the_latch_normalises_int_and_str_chat_ids():
+    """Callers pass both shapes; a type mismatch would silently unlatch."""
+    adapter, connector = _latch_adapter({"edit"})
+
+    asyncio.run(adapter.edit_message(12345, "m1", "SECRET"))
+    asyncio.run(adapter.send("12345", "SECRET"))
+
+    assert connector.ops == ["edit"]
+
+
+def test_the_draft_seal_retry_is_latched():
+    """`_seal_open_draft` retries through its own `_attempt` helper, which posts
+    the frame directly rather than via `_outbound`.
+
+    Without the latch there, a chat refused earlier in the turn still receives
+    a second seal frame on the retry path.
+    """
+    descriptor = CapabilityDescriptor(
+        contract_version=CONTRACT_VERSION,
+        platform="slack",  # stream-is-the-message, so a seal is armed
+        label="Relay",
+        max_message_length=4096,
+        supports_draft_streaming=True,
+        supports_edit=True,
+        supports_threads=True,
+        markdown_dialect="plain",
+        len_unit="chars",
+        supported_ops=ALL_OPS,
+    )
+
+    class _Selective(DecliningConnector):
+        async def send_outbound(self, action, *, platform=None):
+            op = str(action.get("op"))
+            self.ops.append(op)
+            # The stream opens fine; everything after is refused.
+            if op == "draft" and not action.get("final"):
+                return {"success": True, "message_id": "m1"}
+            return dict(CODE_ONLY_DECLINE)
+
+    connector = _Selective(descriptor)
+    adapter = RelayAdapter(
+        PlatformConfig(enabled=True, extra={}), descriptor, transport=connector
+    )
+
+    asyncio.run(adapter.send_draft("C1", 1, "partial"))
+    asyncio.run(adapter.send("C1", "SECRET"))
+    # The seal is refused once; the retry must not post a second frame, and the
+    # turn-final must not be replayed as a plain send.
+    assert connector.ops == ["draft", "draft"]

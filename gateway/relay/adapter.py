@@ -385,13 +385,32 @@ class RelayAdapter(BasePlatformAdapter):
 
     def _latch_declined(self, chat_id: Any, op: str) -> None:
         if op in self._DECLINE_LATCHED_OPS:
-            self._declined_chats.add(str(chat_id))
+            self._declined_chats.add(self._latch_key(chat_id))
 
-    def _clear_declined(self, chat_id: Any) -> None:
-        self._declined_chats.discard(str(chat_id))
+    def _clear_declined(self, chat_id: Any, op: str = "") -> None:
+        """Clear the latch — only on a CONTENT op the connector accepted.
+
+        A cosmetic success must NOT clear it. Typing indicators and read-state
+        are frequently allowed for a chat whose CONTENT is refused, so clearing
+        on any success let a `typing` frame re-open the door for the very next
+        `send`. Found by attacking my own latch.
+        """
+        if op and op not in self._DECLINE_LATCHED_OPS:
+            return
+        self._declined_chats.discard(self._latch_key(chat_id))
+
+    @staticmethod
+    def _latch_key(chat_id: Any) -> str:
+        """The chat a latch applies to, with any thread suffix removed.
+
+        A thread lives INSIDE its parent chat, so a refusal of the parent must
+        also stop `chat:thread` frames — otherwise the same content reaches the
+        same conversation one level down.
+        """
+        return str(chat_id).split(":", 1)[0].strip()
 
     def _is_latched(self, chat_id: Any, op: str) -> bool:
-        return op in self._DECLINE_LATCHED_OPS and str(chat_id) in self._declined_chats
+        return op in self._DECLINE_LATCHED_OPS and self._latch_key(chat_id) in self._declined_chats
 
     async def _outbound(self, chat_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
         """Send one outbound frame tagged with the chat's underlying platform.
@@ -417,7 +436,7 @@ class RelayAdapter(BasePlatformAdapter):
                 log_decline(op, chat_id, result)
                 self._latch_declined(chat_id, op)
             elif result.get("success"):
-                self._clear_declined(chat_id)
+                self._clear_declined(chat_id, op)
         return result
 
     async def _gated_op(
@@ -479,7 +498,7 @@ class RelayAdapter(BasePlatformAdapter):
                     op, chat_id if subject is None else subject, result.get("error"),
                 )
             return None
-        self._clear_declined(chat_id)
+        self._clear_declined(chat_id, op)
         return result
 
     def _text_metadata(self, chat_id: str, metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -591,6 +610,21 @@ class RelayAdapter(BasePlatformAdapter):
 
         async def _attempt() -> Optional[Dict[str, Any]]:
             """One seal attempt; None means ambiguous (exception or lost ack)."""
+            # EQUIVALENT MUTANT, verified rather than assumed: deleting this
+            # check leaves every test green because `_attempt` is unreachable
+            # while latched. `_seal_open_draft` is only reached from
+            # `_absorb_into_open_draft`, which requires an OPEN draft, and a
+            # decline anywhere earlier in the turn prevents the seal from being
+            # attempted at all (probe: a declined `edit` before the seal
+            # produced ZERO seal frames). Kept as defence in depth because
+            # `_attempt` posts its frame directly, so any future caller that
+            # reaches it another way would bypass the latch entirely.
+            if self._is_latched(chat_id, "draft"):
+                return {
+                    "success": False,
+                    "code": EGRESS_DECLINE_CODE,
+                    "error": "egress declined: destination refused earlier in this turn",
+                }
             try:
                 r = await _transport.send_outbound(seal_frame, platform=_seal_platform)
             except Exception as e:
@@ -1340,6 +1374,16 @@ class RelayAdapter(BasePlatformAdapter):
             return seal
         if self._transport is None:
             return SendResult(success=False, error="no transport")
+        if self._is_latched(chat_id, "send"):
+            # This method builds and posts its frame DIRECTLY, so it does not
+            # inherit the latch from _outbound — and it is the delivery
+            # resolver's own entry point, which makes it the most important
+            # one to cover. Found by attacking my own latch.
+            return SendResult(
+                success=False,
+                error="egress declined: destination refused earlier in this turn",
+                raw_response={"success": False, "code": EGRESS_DECLINE_CODE},
+            )
         self._stamp_slack_unfurl(platform_value, _sfp_metadata)
         result = await self._transport.send_outbound(
             {
@@ -1355,6 +1399,12 @@ class RelayAdapter(BasePlatformAdapter):
             },
             platform=platform_value,
         )
+        if isinstance(result, dict):
+            if not result.get("success") and is_egress_decline(result):
+                log_decline("send", chat_id, result)
+                self._latch_declined(chat_id, "send")
+            elif result.get("success"):
+                self._clear_declined(chat_id, "send")
         return _send_result(result, raw_response=result)
 
     def _format_hints(
