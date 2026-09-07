@@ -343,6 +343,26 @@ def attested_relay_targets(platform_name: str) -> Set[str]:
     return attested
 
 
+def _has_native_credential(platform_name: str) -> bool:
+    """Whether the gateway itself holds a token that can send to *platform_name*.
+
+    `_send_to_platform` sends Telegram natively via `pconfig.token`, entirely
+    outside the connector. When that credential exists, no connector-side
+    authorization happens, so the unresolved-handle exemption has no basis.
+    Faults answer True — the SAFE direction, since it only ever withdraws an
+    exemption and falls back to the ordinary attestation check.
+    """
+    try:
+        from gateway.config import Platform, load_gateway_config
+
+        config = load_gateway_config()
+        pconfig = config.platforms.get(Platform(platform_name))
+        return bool(pconfig and pconfig.enabled and getattr(pconfig, "token", None))
+    except Exception:  # noqa: BLE001 - a fault must not GRANT the exemption
+        logger.debug("native-credential probe failed; withdrawing the exemption", exc_info=True)
+        return True
+
+
 def _is_unresolved_handle(platform_name: str, target: str) -> bool:
     """Whether *target* is a NAME the gateway cannot compare against an id.
 
@@ -355,7 +375,20 @@ def _is_unresolved_handle(platform_name: str, target: str) -> bool:
     `-100…` supergroup, or any other platform's form is a resolved destination
     and stays fully guarded.
     """
-    return platform_name == "telegram" and target.startswith("@")
+    if platform_name != "telegram" or not target.startswith("@"):
+        return False
+    # AND THE SEND MUST ACTUALLY REACH THE CONNECTOR. The carve-out's entire
+    # justification is "the connector holds the token and authorizes this".
+    # That is false whenever the tool sends NATIVELY: `_send_to_platform`
+    # calls `_send_telegram(pconfig.token, ...)` directly, so with a native
+    # Telegram token configured, an unattested @handle went out with the
+    # gateway's own credential and no connector ever saw it. Review probed it:
+    # the numeric control was refused, the handle was delivered.
+    #
+    # So the exemption survives only when there is NO native credential able to
+    # send this handle. `_send_to_platform` reaches for `pconfig.token`; if that
+    # exists, delivery never involves the connector.
+    return not _has_native_credential(platform_name)
 
 
 def authorize_relay_target(

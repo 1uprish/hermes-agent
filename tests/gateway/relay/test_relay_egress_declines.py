@@ -943,3 +943,66 @@ def test_the_draft_seal_retry_is_latched():
     # The seal is refused once; the retry must not post a second frame, and the
     # turn-final must not be replayed as a plain send.
     assert connector.ops == ["draft", "draft"]
+
+
+def test_a_new_inbound_turn_clears_the_latch():
+    """The latch needs a boundary or it is an OUTAGE mechanism.
+
+    Once "clear on cosmetic success" was correctly removed, NOTHING could clear
+    it: a content op can never reach the connector to succeed, because the
+    latch blocks it locally first. A refusal at 09:00 would mute the chat
+    forever. A fresh inbound message is the generation marker.
+    """
+    from types import SimpleNamespace
+
+    adapter, connector = _latch_adapter({"edit"})
+
+    asyncio.run(adapter.edit_message("C1", "m1", "SECRET"))
+    # Same turn: still suppressed.
+    asyncio.run(adapter.send("C1", "same turn"))
+    assert connector.ops == ["edit"]
+
+    # A new inbound message arrives for this chat; the connector now accepts.
+    adapter._clear_declined_for_turn(SimpleNamespace(source=SimpleNamespace(chat_id="C1")))
+    connector.refuse = set()
+    asyncio.run(adapter.send("C1", "legitimate next turn"))
+    assert connector.ops == ["edit", "send"]
+
+
+def test_on_inbound_is_the_thing_that_clears_the_latch():
+    """Caller-level. The two tests above drive `_clear_declined_for_turn`
+    DIRECTLY, so they pass even if `_on_inbound` never calls it — the exact gap
+    that produced three earlier blockers. This drives the real inbound entry
+    point, and scopes teardown to the arriving chat only.
+    """
+    from gateway.config import Platform
+    from gateway.platforms.base import MessageEvent
+    from gateway.session import SessionSource
+
+    adapter, connector = _latch_adapter({"edit"})
+
+    # Two chats are latched; only C1 receives a new message.
+    asyncio.run(adapter.edit_message("C1", "m1", "SECRET"))
+    asyncio.run(adapter.edit_message("C2", "m1", "SECRET"))
+    assert adapter._latch_key("C1") in adapter._declined_chats
+    assert adapter._latch_key("C2") in adapter._declined_chats
+
+    event = MessageEvent(
+        text="a new turn",
+        source=SessionSource(platform=Platform.SLACK, chat_id="C1", user_id="u1"),
+        message_id="in-1",
+    )
+    asyncio.run(adapter._on_inbound(event))
+
+    assert adapter._latch_key("C1") not in adapter._declined_chats
+    # C2 got no message, so its refusal must still stand.
+    assert adapter._latch_key("C2") in adapter._declined_chats
+
+
+def test_latch_teardown_survives_a_malformed_inbound():
+    """Teardown must never break inbound delivery."""
+    from types import SimpleNamespace
+
+    adapter, _ = _latch_adapter({"edit"})
+    adapter._clear_declined_for_turn(SimpleNamespace(source=None))
+    adapter._clear_declined_for_turn(SimpleNamespace())

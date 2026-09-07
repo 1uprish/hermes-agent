@@ -838,3 +838,65 @@ def test_guard_falls_back_to_config_when_no_live_adapter(monkeypatch):
     monkeypatch.setattr(eg, "attested_relay_targets", lambda p: set())
 
     assert eg.authorize_relay_target("discord", "999") is not None
+
+
+# ── the Telegram @handle exemption must not cover a NATIVE send ────────────
+
+
+def test_handle_exemption_withdrawn_when_a_native_token_exists(monkeypatch):
+    """The exemption's justification is "the connector authorizes this".
+
+    That is false when the gateway holds its own Telegram token:
+    `_send_to_platform` calls `_send_telegram(pconfig.token, ...)` directly and
+    no connector is involved. Measured before the fix: the numeric control was
+    refused while `@unattested_public` was DELIVERED with the gateway's own
+    credential.
+    """
+    import gateway.relay as gr
+    import gateway.relay.egress as eg
+
+    monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: {"telegram"})
+    monkeypatch.setattr(eg, "attested_relay_targets", lambda p: {"123"})
+    monkeypatch.setattr(eg, "_has_native_credential", lambda p: True)
+
+    assert eg.authorize_relay_target("telegram", "@unattested_public") is not None
+    # Controls: the ordinary guard is unchanged in both directions.
+    assert eg.authorize_relay_target("telegram", "999") is not None
+    assert eg.authorize_relay_target("telegram", "123") is None
+
+
+def test_handle_exemption_survives_when_only_the_connector_can_send(monkeypatch):
+    """The converse control — without it the fix is just "refuse everything".
+
+    Relay-only is the configuration the exemption exists for: the connector
+    holds the token and resolves the handle, so it authorizes the destination.
+    """
+    import gateway.relay as gr
+    import gateway.relay.egress as eg
+
+    monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: {"telegram"})
+    monkeypatch.setattr(eg, "attested_relay_targets", lambda p: {"123"})
+    monkeypatch.setattr(eg, "_has_native_credential", lambda p: False)
+
+    assert eg.authorize_relay_target("telegram", "@public_channel") is None
+    # A resolved destination stays fully guarded even in this mode.
+    assert eg.authorize_relay_target("telegram", "999") is not None
+
+
+def test_native_credential_probe_fault_withdraws_the_exemption(monkeypatch):
+    """A fault must not GRANT an exemption — the safe direction is to withdraw
+    it and fall back to the ordinary attestation check."""
+    import gateway.relay as gr
+    import gateway.relay.egress as eg
+
+    monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: {"telegram"})
+    monkeypatch.setattr(eg, "attested_relay_targets", lambda p: {"123"})
+
+    import gateway.config as gcfg
+
+    def _boom(*a, **kw):
+        raise RuntimeError("config unreadable")
+
+    monkeypatch.setattr(gcfg, "load_gateway_config", _boom)
+    assert eg._has_native_credential("telegram") is True
+    assert eg.authorize_relay_target("telegram", "@anything") is not None

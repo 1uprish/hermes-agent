@@ -888,6 +888,16 @@ class RelayAdapter(BasePlatformAdapter):
         # class default is False, so only an explicit descriptor bit turns it on.
         self.supports_inchannel_continuable = bool(getattr(descriptor, "supports_inchannel_continuable", False))
 
+    def _clear_declined_for_turn(self, event: Any) -> None:
+        """Drop the terminal-decline latch for the chat this inbound belongs to."""
+        try:
+            source = getattr(event, "source", None)
+            chat_id = getattr(source, "chat_id", None) if source else None
+            if chat_id:
+                self._declined_chats.discard(self._latch_key(chat_id))
+        except Exception:  # noqa: BLE001 - teardown must never break inbound
+            logger.debug("relay latch teardown skipped", exc_info=True)
+
     async def _on_inbound(self, event) -> None:
         """Bridge a connector-delivered MessageEvent into the normal adapter path."""
         # Inbound replay dedupe: the relay leg is at-least-once — on WS re-handshake
@@ -901,6 +911,14 @@ class RelayAdapter(BasePlatformAdapter):
                 return
             self._seen_inbound[dedupe_key] = None
             self._evict_oldest(self._seen_inbound, self._SEEN_INBOUND_MAX)
+        # NEW TURN = LATCH TEARDOWN. Without this the latch has no boundary and
+        # becomes an outage mechanism: a content op can never reach the
+        # connector to succeed (the latch blocks it locally), so nothing could
+        # ever clear it once "clear on cosmetic success" was correctly removed.
+        # A fresh inbound message for a chat is the natural generation marker —
+        # the connector is evidently willing to talk about this chat again, and
+        # the next content op gets one real attempt at the wire.
+        self._clear_declined_for_turn(event)
         self._capture_scope(event)
         self._stamp_slack_session_thread(event)
         # A structured prompt answer resolves its waiting primitive and is CONSUMED —
