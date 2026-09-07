@@ -117,9 +117,17 @@ def false_success():
     record('false_success_boundary', fidelity='real maintained PowerShell script; controlled zero-exit update child deletes its module; not full update', exit=p.returncode, module_exists=(package / 'main.py').exists(), desktop_exists=(install / 'apps/desktop/release').exists(), receipt=json.loads(receipt.read_text(encoding='utf-8-sig')) if receipt.exists() else None)
 
 
+def watchdog():
+    shell = str(Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe')
+    env = dict(os.environ, HERMES_UPDATE_STEP_IDLE_SECONDS='3', HERMES_SELFTEST_HOLD_SECONDS='20', HERMES_SELFTEST_FLOOD_KB='128')
+    p = subprocess.run([shell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(ROOT / 'scripts/desktop-update/windows.ps1'), '-InstallRoot', str(HOME / 'watchdog/repo'), '-SelfTestPipeDrain', '-NoUi'], env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=90)
+    (OUT / 'watchdog.log').write_bytes(p.stdout + p.stderr)
+    record('watchdog_native_selftest', exit=p.returncode, output_tail=(p.stdout + p.stderr).decode('utf-8', errors='replace')[-2500:])
+
+
 if sys.platform != 'win32':
     raise SystemExit('Native Windows required')
-for probe in [progress, promotion, powershell_missing, false_success]:
+for probe in [progress, promotion, powershell_missing, false_success, watchdog]:
     try:
         probe()
     except Exception as exc:
