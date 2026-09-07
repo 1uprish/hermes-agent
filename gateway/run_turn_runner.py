@@ -35,6 +35,16 @@ if TYPE_CHECKING:  # string annotations only; never imported at runtime (cycle)
 logger = logging.getLogger("gateway.run")
 
 
+class _ExecApprovalDeclined(RuntimeError):
+    """The connector refused the approval card's destination.
+
+    Raised (not returned) so it propagates out of `_approval_notify_sync` to
+    `_await_gateway_decision`, whose notify-failure path drops the central
+    approval queue entry and unblocks the waiting tool. A plain return
+    suppressed the text fallback but left that entry pending.
+    """
+
+
 class TurnRunner:
     """Per-turn collaborator carrying ``GatewayRunner._run_agent_inner``'s tool-progress callbacks."""
 
@@ -351,6 +361,20 @@ class TurnRunner:
                 reply_to=ctx._progress_reply_to, metadata=ctx._progress_metadata, fallback_text=st.fallback_text(),
             )
             if getattr(result, "success", False):
+                return
+            # P5(b): an AUTHORIZATION decline is not a broken card lane. The
+            # fallback below sends the same task text to the same chat, which
+            # turns a refused card into delivered plain text. Stop the lane
+            # without re-delivering; the refusal is already logged.
+            from gateway.relay.egress import is_egress_decline
+
+            if is_egress_decline(getattr(result, "raw_response", None)):
+                st.native_failed = True
+                logger.warning(
+                    "Slack native task-card progress DECLINED by the connector's "
+                    "egress guard — suppressing the text fallback (the "
+                    "destination is not approved for this connection)"
+                )
                 return
             st.native_failed = True
             logger.warning(
@@ -1283,8 +1307,24 @@ class TurnRunner:
                         "egress guard — not falling back to text (the "
                         "destination is not approved for this connection)"
                     )
-                    return
+                    # RAISE, do not return. This function is the notify_cb for
+                    # `_await_gateway_decision`, which already has a correct
+                    # undeliverable path: a raising notify drops the queue entry
+                    # and returns `notify_failed`, unblocking the tool. Returning
+                    # quietly suppressed the text fallback (right) but left the
+                    # CENTRAL approval entry pending (wrong) — the dangerous
+                    # command then blocked until the approval timeout. My earlier
+                    # comment claimed the registration was torn down; only the
+                    # adapter's private prompt map was.
+                    raise _ExecApprovalDeclined(
+                        "exec approval undeliverable: connector egress declined "
+                        "this destination"
+                    )
                 logger.warning("Button-based approval failed (send returned error), falling back to text")
+            except _ExecApprovalDeclined:
+                # Must escape this handler: the fallback below is a text send to
+                # the destination the connector just refused.
+                raise
             except Exception as e:
                 logger.warning("Button-based approval failed, falling back to text: %s", e)
         # Plain-text prompt with the adapter's typed prefix (e.g. `!approve`): typed "/" is blocked

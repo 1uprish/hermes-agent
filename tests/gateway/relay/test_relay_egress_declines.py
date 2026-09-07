@@ -530,3 +530,84 @@ def test_code_only_media_decline_does_not_fall_back(code_only_relay):
     assert connector.ops == ["send_media"]
     assert isinstance(result.raw_response, dict)
     assert is_egress_decline(result.raw_response)
+
+def _code_only_adapter():
+    descriptor = CapabilityDescriptor(
+        contract_version=CONTRACT_VERSION,
+        platform="discord",
+        label="Relay",
+        max_message_length=4096,
+        supports_draft_streaming=True,
+        supports_edit=True,
+        supports_threads=True,
+        markdown_dialect="plain",
+        len_unit="chars",
+        supported_ops=ALL_OPS,
+    )
+    connector = CodeOnlyDecliningConnector(descriptor)
+    adapter = RelayAdapter(
+        PlatformConfig(enabled=True, extra={}), descriptor, transport=connector
+    )
+    return adapter, connector
+
+
+# ── sibling content lanes that also re-address the same chat ────────────────
+
+
+def test_declined_draft_seal_does_not_replay_as_a_plain_send():
+    """Review round 3, finding 1 — a real content leak, reproduced end to end.
+
+    On a stream-is-the-message platform (Slack) the turn-final is converted
+    into draft(final=True). When the connector REFUSES that seal, the old code
+    read it as a lane failure and delivered the same content through `send` —
+    ops were [draft(partial), draft(final,SECRET), send(SECRET)].
+    """
+    descriptor = CapabilityDescriptor(
+        contract_version=CONTRACT_VERSION,
+        platform="slack",  # stream-is-the-message; discord would not arm a seal
+        label="Relay",
+        max_message_length=4096,
+        supports_draft_streaming=True,
+        supports_edit=True,
+        supports_threads=True,
+        markdown_dialect="plain",
+        len_unit="chars",
+        supported_ops=ALL_OPS,
+    )
+
+    class SealDecliner(DecliningConnector):
+        async def send_outbound(self, action, *, platform=None):
+            op = str(action.get("op"))
+            self.ops.append(op)
+            if op == "draft" and not action.get("final"):
+                return {"success": True, "message_id": "m1"}  # stream opens
+            return dict(CODE_ONLY_DECLINE)  # the SEAL is refused
+
+    connector = SealDecliner(descriptor)
+    adapter = RelayAdapter(
+        PlatformConfig(enabled=True, extra={}), descriptor, transport=connector
+    )
+
+    asyncio.run(adapter.send_draft("C1", 1, "partial"))
+    asyncio.run(adapter.send("C1", "SECRET", metadata={}))
+
+    # The seal was attempted and refused; the content must NOT be replayed.
+    assert connector.ops == ["draft", "draft"]
+    assert "send" not in connector.ops
+
+
+def test_declined_task_card_progress_carries_the_decline_to_its_caller():
+    """Review round 3, finding 6 — the same laundering, in the card lane.
+
+    The TurnRunner reads a bare failure as "card lane unavailable" and sends
+    fallback TEXT to the same chat, so the decline must reach it structured.
+    """
+    adapter, connector = _code_only_adapter()
+    result = asyncio.run(
+        adapter.send_native_task_card_progress(
+            "C1", [{"text": "step one"}], title="Working"
+        )
+    )
+    assert result.success is False
+    assert connector.ops == ["task_card"]
+    assert is_egress_decline(result.raw_response)

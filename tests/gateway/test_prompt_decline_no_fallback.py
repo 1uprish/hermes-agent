@@ -190,3 +190,68 @@ def test_legacy_connector_without_raw_response_still_classified():
 
     legacy = SimpleNamespace(success=False, error=DECLINE_ERROR, raw_response=None)
     assert _approval_send_outcome(_future(legacy), timeout=5) == "declined"
+
+
+def test_declined_clarify_aborts_instead_of_waiting_for_a_reply():
+    """Review round 3, finding 4.
+
+    `_clarify_send_disposition` handled `failed` and `ambiguous`; `declined`
+    fell through to `wait_for_response`, so the agent blocked until
+    clarify_timeout for a card that was REFUSED and can never be answered.
+    A decline is more definitive than a failure, not less.
+    """
+    from types import SimpleNamespace
+
+    from gateway.relay.egress import EGRESS_DECLINE_CODE
+    from gateway.run import _clarify_send_disposition
+
+    cleared = []
+    clarify_mod = SimpleNamespace(
+        clear_session=lambda sk: cleared.append(sk),
+        get_clarify_timeout=lambda: 600,
+        wait_for_response=lambda *a, **k: pytest.fail(
+            "waited for a reply to a prompt the connector refused"
+        ),
+    )
+
+    class _Fut:
+        def result(self, timeout=None):
+            return SimpleNamespace(
+                success=False,
+                error=None,
+                raw_response={"success": False, "code": EGRESS_DECLINE_CODE},
+            )
+
+    abort = _clarify_send_disposition(
+        _Fut(), session_key="sk1", clarify_mod=clarify_mod
+    )
+    assert abort is not None
+    assert cleared == ["sk1"]
+
+
+def test_ambiguous_clarify_still_waits():
+    """Control: a possibly-delivered card must STAY armed for a late reply."""
+    from types import SimpleNamespace
+
+    from gateway.run import _clarify_send_disposition
+
+    cleared = []
+    clarify_mod = SimpleNamespace(
+        clear_session=lambda sk: cleared.append(sk),
+        get_clarify_timeout=lambda: 600,
+        wait_for_response=lambda *a, **k: "answer",
+    )
+
+    class _Fut:
+        def result(self, timeout=None):
+            return SimpleNamespace(
+                success=False,
+                error="lost ack",
+                raw_response={"success": False, "error": "x", "ambiguous": True},
+            )
+
+    assert (
+        _clarify_send_disposition(_Fut(), session_key="sk1", clarify_mod=clarify_mod)
+        is None
+    )
+    assert cleared == []

@@ -549,7 +549,17 @@ class RelayAdapter(BasePlatformAdapter):
         if result.get("success"):
             # The connector returns the stream's ts as the message identity.
             return SendResult(success=True, message_id=str(result.get("message_id") or "") or None)
-        return SendResult(success=False, error=str(result.get("error") or "draft seal failed"))
+        # P5(b): carry the structured body. Without it the caller cannot tell a
+        # lane failure (fall through to a plain send, correct) from an
+        # AUTHORIZATION decline (a plain send re-delivers the very content the
+        # connector refused, to the same chat).
+        if is_egress_decline(result):
+            log_decline("draft_seal", chat_id, result)
+        return SendResult(
+            success=False,
+            error=str(result.get("error") or decline_error(result) or "draft seal failed"),
+            raw_response=result,
+        )
 
     async def _absorb_into_open_draft(
         self, chat_id: str, content: str, metadata: Dict[str, Any], interim: bool
@@ -570,6 +580,17 @@ class RelayAdapter(BasePlatformAdapter):
             return None
         seal = await self._seal_open_draft(chat_id, content, metadata, draft_key=key)
         if seal.success:
+            return seal
+        # An AUTHORIZATION decline is not a lane failure. Falling through here
+        # re-sends the sealed content as a plain `send` into the destination the
+        # connector just refused — review demonstrated the leak end to end
+        # (ops: draft(partial) -> send(SECRET)). Surface the refusal instead.
+        if is_egress_decline(getattr(seal, "raw_response", None)):
+            logger.warning(
+                "relay draft seal DECLINED for %s — not falling back to a plain "
+                "send (the destination is not approved for this connection)",
+                chat_id,
+            )
             return seal
         logger.warning("relay seal failed (%s); delivering turn-final as plain send", seal.error)
         return None
@@ -630,7 +651,17 @@ class RelayAdapter(BasePlatformAdapter):
             return result
         if result.get("success"):
             return SendResult(success=True)
-        return SendResult(success=False, error=str(result.get("error") or "task_card failed"))
+        # P5(b): carry the structured body. The TurnRunner reads a bare failure
+        # as "card lane unavailable" and sends fallback TEXT to the same chat —
+        # the same decline-laundering fixed for media and prompt, in a sibling
+        # content lane.
+        if is_egress_decline(result):
+            log_decline("task_card", chat_id, result)
+        return SendResult(
+            success=False,
+            error=str(result.get("error") or decline_error(result) or "task_card failed"),
+            raw_response=result,
+        )
 
     async def stop_native_task_card_progress(
         self,
@@ -647,7 +678,9 @@ class RelayAdapter(BasePlatformAdapter):
         # refusal as a bare failure, which reads as "the card lane is broken"
         # rather than "this destination was refused".
         return SendResult(
-            success=bool(result.get("success")), error=result.get("error")
+            success=bool(result.get("success")),
+            error=result.get("error"),
+            raw_response=result,
         )
 
     async def abandon_open_draft(

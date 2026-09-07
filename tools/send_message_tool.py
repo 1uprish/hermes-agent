@@ -79,13 +79,33 @@ def _authorize_relay_target(platform_name: str, chat_id) -> str | None:
     """
     try:
         from gateway.relay.egress import authorize_relay_target
-    except ImportError:
-        # ABSENCE ONLY. No gateway package means there is no relay egress to
-        # authorize, so proceeding is correct. A broad `except Exception` here
-        # also swallowed module-INITIALIZATION faults — a broken dependency
-        # inside an installed gateway — and returned None, which means
-        # "authorized". Review injected a non-ImportError import failure and
-        # watched an unattested send go through.
+    except ImportError as exc:
+        # ABSENCE ONLY, and absence means the gateway relay module ITSELF is
+        # missing — `exc.name` says which module was not found. An ImportError
+        # naming a NESTED dependency is a broken installation, i.e. a fault,
+        # and returning None here means "authorized". Review probed exactly
+        # that (`ImportError.name = "gateway.relay.dependency"`) and got an
+        # authorized verdict, so `except ImportError` alone was still fail-open.
+        # An ImportError with NO `name` cannot be attributed to a nested
+        # dependency, and refusing on it would break the legitimate
+        # gateway-absent path (CLI/cron) — an outage in exchange for a fault we
+        # cannot even identify. Only a name that points somewhere ELSE is a
+        # fault.
+        _missing = getattr(exc, "name", None)
+        if _missing and _missing not in (
+            "gateway",
+            "gateway.relay",
+            "gateway.relay.egress",
+        ):
+            logger.exception(
+                "relay egress module failed to import for %s — refusing the send",
+                platform_name,
+            )
+            return (
+                f"Refusing to send to relay target '{platform_name}': the egress "
+                "authorization module could not be loaded, so this destination "
+                "could not be verified."
+            )
         logger.debug("relay target authorization unavailable", exc_info=True)
         return None
     except Exception:  # noqa: BLE001 - the module is THERE and broke; FAIL CLOSED

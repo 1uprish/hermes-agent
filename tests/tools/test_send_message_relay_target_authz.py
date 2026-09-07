@@ -426,3 +426,73 @@ def test_relay_module_import_fault_refuses(monkeypatch):
     denial = smt._authorize_relay_target("discord", "999")
     assert denial is not None
     assert "could not be" in denial
+
+
+@pytest.mark.parametrize("configured", ["discord", "Discord", "DISCORD", " discord "])
+def test_relay_fronted_matching_is_case_insensitive(relay_env, monkeypatch, configured):
+    """Review round 3, finding 3 — an attestation bypass on a string compare.
+
+    `relay_routed_platform` lowercases the REQUESTED name but `_relay_fronted`
+    returned configured names verbatim, so a platform configured as "Discord"
+    missed the membership test and looked native — skipping the guard entirely.
+    """
+    import gateway.relay as gr
+    import gateway.relay.egress as eg
+
+    monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: {configured})
+    monkeypatch.setattr(eg, "attested_relay_targets", lambda p: set())
+    assert eg.authorize_relay_target("discord", "999") is not None
+
+
+def test_attested_target_still_allowed_when_config_case_differs(relay_env, monkeypatch):
+    """Control: normalizing must not start refusing legitimate traffic."""
+    import gateway.relay as gr
+    import gateway.relay.egress as eg
+
+    monkeypatch.setattr(gr, "relay_fronted_platforms", lambda: {"Discord"})
+    monkeypatch.setattr(eg, "attested_relay_targets", lambda p: {"999"})
+    assert eg.authorize_relay_target("discord", "999") is None
+
+
+def test_nested_dependency_importerror_refuses(monkeypatch):
+    """Review round 3, finding 2 — `except ImportError` was still fail-open.
+
+    An ImportError naming a NESTED module means an installed gateway failed to
+    load (broken dependency). That is a fault, not "there is no relay here",
+    and returning None means authorized.
+    """
+    import builtins
+
+    import tools.send_message_tool as smt
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **kw):
+        if name == "gateway.relay.egress":
+            err = ImportError("No module named 'gateway.relay.dependency'")
+            err.name = "gateway.relay.dependency"
+            raise err
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    denial = smt._authorize_relay_target("discord", "999")
+    assert denial is not None
+
+
+def test_absent_gateway_module_importerror_still_authorizes(monkeypatch):
+    """Control: genuine absence (CLI/cron) must keep working."""
+    import builtins
+
+    import tools.send_message_tool as smt
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **kw):
+        if name == "gateway.relay.egress":
+            err = ImportError("No module named 'gateway'")
+            err.name = "gateway"
+            raise err
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    assert smt._authorize_relay_target("discord", "999") is None

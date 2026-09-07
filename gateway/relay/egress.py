@@ -104,6 +104,21 @@ class RelayRouteUnknown(RuntimeError):
     """
 
 
+def _is_missing_gateway_relay(exc: ImportError) -> bool:
+    """True only when the gateway relay package ITSELF is absent.
+
+    `ImportError.name` is the module that could not be found. A nested
+    dependency failing is a broken installation, not "there is no relay here",
+    and the two must not share a verdict.
+    """
+    name = getattr(exc, "name", None)
+    # No attributable module ⇒ treat as absence: refusing on an unidentifiable
+    # ImportError trades a fault we cannot name for a real outage.
+    if not name:
+        return True
+    return name in ("gateway", "gateway.relay", "gateway.relay.egress")
+
+
 def _relay_fronted() -> Set[str]:
     """Platforms the connector fronts for this gateway.
 
@@ -117,11 +132,25 @@ def _relay_fronted() -> Set[str]:
     """
     try:
         from gateway.relay import relay_fronted_platforms
-    except ImportError:  # no gateway relay module ⇒ no relay egress
+    except ImportError as exc:
+        # Only the ABSENCE of the relay module itself is benign. An ImportError
+        # naming a nested dependency means an installed module failed to load —
+        # a FAULT — and returning an empty set there reclassifies every relay
+        # platform as native. Review probed this with
+        # `ImportError.name = "gateway.relay.dependency"` and got an authorized
+        # verdict, so `except ImportError` alone was not the fix it looked like.
+        if not _is_missing_gateway_relay(exc):
+            raise RelayRouteUnknown(
+                f"relay module failed to import: {exc}"
+            ) from exc
         return set()
 
     try:
-        return {str(p) for p in relay_fronted_platforms()}
+        # CASE-NORMALIZED. `relay_routed_platform` lowercases the requested
+        # name, so an un-normalized set made a mixed-case configured platform
+        # ("Discord") miss the membership test and look native — an
+        # attestation bypass on a string comparison.
+        return {str(p).strip().lower() for p in relay_fronted_platforms()}
     except Exception as exc:  # noqa: BLE001 - routing unknown; never assume native
         raise RelayRouteUnknown(
             f"relay route discovery failed: {exc}"
