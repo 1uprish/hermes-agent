@@ -8,7 +8,7 @@ from contextvars import ContextVar
 import uuid
 
 _EPOCH = uuid.uuid4().hex
-event_authority = ContextVar("prompt_event_authority", default=None)
+event_authority: ContextVar[dict | None] = ContextVar("prompt_event_authority", default=None)
 
 
 def begin_execution(session: dict) -> int:

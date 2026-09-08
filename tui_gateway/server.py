@@ -573,7 +573,7 @@ def write_json(obj: dict) -> bool:
 def _event_frame(event: str, sid: str, payload: dict | None = None) -> dict:
     from .prompt_execution import event_authority
     authority = event_authority.get()
-    if authority and event in {"message.start", "message.complete", "message.error"}:
+    if authority and event in {"message.start", "message.complete", "message.error", "error"}:
         payload = {**(payload or {}), **authority}
     params: dict = {"type": event, "session_id": sid, **({"payload": payload} if payload is not None else {})}
     return {"jsonrpc": "2.0", "method": "event", "params": params}
