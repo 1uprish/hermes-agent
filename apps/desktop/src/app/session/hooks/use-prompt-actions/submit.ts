@@ -1,4 +1,4 @@
-import { type MutableRefObject, useCallback } from 'react'
+import { type MutableRefObject, useCallback, useRef } from 'react'
 
 import { PROMPT_SUBMIT_REQUEST_TIMEOUT_MS } from '@/hermes'
 import type { Translations } from '@/i18n'
@@ -40,7 +40,7 @@ import { resolveSessionProfile } from '../use-session-actions/utils'
 
 import { finalizeInterruptedMessages } from './rewind'
 import { registerRecoveredRuntime, singleFlightSessionResume, takeRecoveredRuntime } from './single-flight-resume'
-import { captureSubmissionDestination } from './submission-destination'
+import { captureSubmissionDestination, type SubmissionDestination } from './submission-destination'
 import {
   acquireSubmitInFlight,
   type GatewayRequest,
@@ -119,6 +119,19 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
     updateSessionState,
     scope = MAIN_SUBMIT_SCOPE
   } = deps
+
+  const pending = useRef(
+    new Map<
+      string,
+      {
+        id: string
+        destination: SubmissionDestination
+        attachments: ComposerAttachment[]
+        text: string
+        params: Record<string, unknown>
+      }
+    >()
+  )
 
   return useCallback(
     async (rawText: string, options?: SubmitTextOptions) => {
@@ -298,11 +311,22 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         targetStartedInCurrentView = true
       }
 
-      const destination =
+      const captured =
         options?.destination ?? captureSubmissionDestination(targetStoredSessionId ?? sessionId, ambientRequestGateway)
-
+      const retryKey = JSON.stringify([
+        targetStoredSessionId ?? sessionId,
+        captured.owner,
+        rawText,
+        attachments.map(a => a.occurrenceId ?? a.id),
+        options?.displayText,
+        options?.displayKind,
+        options?.fromQueue,
+        options?.submission_id
+      ])
+      const retained = pending.current.get(retryKey)
+      const destination = retained?.destination ?? captured
       const requestGateway = destination.requestGateway
-      const submissionId = options?.submission_id ?? crypto.randomUUID()
+      const submissionId = retained?.id ?? options?.submission_id ?? crypto.randomUUID()
 
       let startingStoredSessionId = routedSessionNeedsResume
         ? routedStoredSessionId
@@ -735,11 +759,13 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         // first and submit's own recovery never runs — that asymmetry is why
         // plain text survived sleep/wake but images reported "session not
         // found". The attach path recovers and reports the live id back here.
-        const attachResult = await syncAttachmentsForSubmit(sessionId, attachments, {
-          updateComposerAttachments: usingComposerAttachments,
-          storedSessionId: targetStoredSessionId,
-          requestGateway
-        })
+        const attachResult = retained
+          ? { sessionId, attachments: retained.attachments }
+          : await syncAttachmentsForSubmit(sessionId, attachments, {
+              updateComposerAttachments: usingComposerAttachments,
+              storedSessionId: targetStoredSessionId,
+              requestGateway
+            })
 
         const syncedAttachments = attachResult.attachments
         // Always a live string; pin it so TS narrows past the outer
@@ -761,9 +787,13 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         // Images keep their inline bounded thumbnail — see optimisticAttachmentRef.
         attachmentRefs = syncedAttachments.map(optimisticAttachmentRef).filter((r): r is string => Boolean(r))
         rewriteOptimistic(liveSessionId)
-        const text = buildContextText(syncedAttachments)
+        const text = retained?.text ?? buildContextText(syncedAttachments)
 
-        trackPendingSubmission(targetStoredSessionId ?? liveSessionId, { id: submissionId, text, displayText: options?.displayText })
+        trackPendingSubmission(targetStoredSessionId ?? liveSessionId, {
+          id: submissionId,
+          text,
+          displayText: options?.displayText
+        })
 
         const submitParams = (targetId: string) => ({
           session_id: targetId,
@@ -785,6 +815,15 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
           ...(options?.fromQueue && { queued: true })
         })
 
+        const prepared = retained ?? {
+          id: submissionId,
+          destination,
+          attachments: syncedAttachments,
+          text,
+          params: submitParams(liveSessionId)
+        }
+        pending.current.set(retryKey, prepared)
+
         // On sleep/wake the gateway's in-memory session may have been cleared
         // while the desktop app still holds the old session ID. The shared
         // resolver re-registers the stored session and retries once; every
@@ -800,7 +839,11 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
             recoverStoredSessionId,
             liveId =>
               withSessionBusyRetry(() =>
-                requestGateway('prompt.submit', submitParams(liveId), PROMPT_SUBMIT_REQUEST_TIMEOUT_MS)
+                requestGateway(
+                  'prompt.submit',
+                  { ...prepared.params, session_id: liveId },
+                  PROMPT_SUBMIT_REQUEST_TIMEOUT_MS
+                )
               ),
             {
               requestGateway,
@@ -831,9 +874,8 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
           )
 
           if (
-            options?.submission_id !== undefined &&
-            (result?.admission_id !== options.submission_id ||
-              !['queued', 'started', 'terminal'].includes(result?.status ?? ''))
+            (options?.submission_id !== undefined || result?.admission_id !== undefined) &&
+            (result?.admission_id !== submissionId || !['queued', 'started', 'terminal'].includes(result?.status ?? ''))
           ) {
             dropOptimistic(sessionId)
             releaseBusy()
@@ -842,9 +884,16 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
           }
 
           if (result?.admission_id === submissionId) {
-            trackPendingSubmission(targetStoredSessionId ?? liveSessionId, { id: submissionId, text, displayText: options?.displayText, status: result.status })
+            trackPendingSubmission(targetStoredSessionId ?? liveSessionId, {
+              id: submissionId,
+              text,
+              displayText: options?.displayText,
+              status: result.status
+            })
 
-            if (result.status === 'queued') { dropOptimistic(sessionId) }
+            if (result.status === 'queued') {
+              dropOptimistic(sessionId)
+            }
           }
         } catch (firstErr) {
           if (firstErr instanceof SessionRecoveryAborted) {
@@ -859,6 +908,8 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         if (submitErr !== null) {
           throw submitErr
         }
+
+        pending.current.delete(retryKey)
 
         if (usingComposerAttachments) {
           // A submit owns only the occurrences that actually reached the

@@ -250,6 +250,20 @@ function Harness({
 }
 
 describe('durable submit acknowledgement', () => {
+  it('retains a failed slash kickoff and forwards queued admission intent on retry', async () => {
+    $sessions.set([])
+    $connection.set(null)
+    $composerAttachments.set([])
+    const requestGateway = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'slash.exec') return { type: 'skill', name: 'private-skill', message: 'expanded skill' } as never
+      return { admission_id: params?.submission_id, status: 'unknown' } as never
+    })
+    let handle: HarnessHandle | null = null
+    await actRender(<Harness onReady={h => (handle = h)} refreshSessions={async () => undefined} requestGateway={requestGateway} />)
+    expect(await handle!.submitText('/private-skill', { fromQueue: true, submission_id: 'queued-skill' })).toBe(false)
+    expect(requestGateway.mock.calls.find(call => call[0] === 'prompt.submit')?.[1]).toMatchObject({ queued: true, submission_id: 'queued-skill' })
+  })
+
   afterEach(() => {
     cleanup()
     vi.restoreAllMocks()
