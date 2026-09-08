@@ -72,3 +72,15 @@ def test_rpc_viewer_replays_routes_commands_and_only_detaches():
         assert "history" in "\n".join(output) and "test-tool" in "\n".join(output)
         assert "not accepted" in "\n".join(output)
     asyncio.run(scenario())
+
+
+def test_rejected_upgrade_does_not_print_authenticated_url(monkeypatch, capsys):
+    import aiohttp
+    from hermes_cli import shared_session_cli
+    async def rejected(*args):
+        raise aiohttp.ClientError("ws://127.0.0.1/api/ws?token=private-secret")
+    monkeypatch.setattr(shared_session_cli, "_run", rejected)
+    with pytest.raises(SystemExit) as exc:
+        shared_session_cli.run_attached_cli("unused", "stored")
+    assert exc.value.code == 1
+    assert "private-secret" not in capsys.readouterr().out
