@@ -20,6 +20,7 @@ def test_discovery_uses_exact_profile_and_owner_handshake(tmp_path):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             requests.append(self.path)
+            assert self.headers.get('Authorization') == 'Bearer private-credential'
             payload = json.dumps(reply).encode()
             self.send_response(200)
             self.end_headers()
@@ -32,6 +33,13 @@ def test_discovery_uses_exact_profile_and_owner_handshake(tmp_path):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     origin = f"http://127.0.0.1:{server.server_port}"
+    import hashlib
+    directory = home / 'runtime' / 'session-attach'
+    directory.mkdir(parents=True, mode=0o700)
+    credential = directory / (hashlib.sha256(origin.encode()).hexdigest() + '.json')
+    credential.write_text(json.dumps({'shared_runtime_url': origin, 'profile_home': str(home.resolve()),
+                                      'authorization': 'Bearer private-credential'}))
+    credential.chmod(0o600)
     lease, error = try_acquire_active_session(
         session_id="same-id", surface="desktop", config={}, registry_home=home,
         metadata={"live_session_id": "live", "shared_runtime_url": origin},
@@ -48,6 +56,20 @@ def test_discovery_uses_exact_profile_and_owner_handshake(tmp_path):
         env = {"HERMES_TUI_GATEWAY_URL": "   "}
         configure_tui_attachment(env, "same-id", registry_home=home)
         assert env["HERMES_TUI_GATEWAY_URL"] == reply["websocket_url"]
+        request_count = len(requests)
+        credential.chmod(0o644)
+        with pytest.raises(ValueError, match="not private"):
+            discover_attach_url("same-id", registry_home=home)
+        assert len(requests) == request_count
+        credential.chmod(0o600)
+        record = json.loads(credential.read_text())
+        record['profile_home'] = str(other.resolve())
+        credential.write_text(json.dumps(record))
+        with pytest.raises(ValueError, match="identity"):
+            discover_attach_url("same-id", registry_home=home)
+        assert len(requests) == request_count
+        record['profile_home'] = str(home.resolve())
+        credential.write_text(json.dumps(record))
         reply["profile_home"] = str(other.resolve())
         with pytest.raises(ValueError, match="identity"):
             discover_attach_url("same-id", registry_home=home)
