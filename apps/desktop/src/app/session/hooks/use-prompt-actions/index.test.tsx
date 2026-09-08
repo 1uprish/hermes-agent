@@ -41,6 +41,7 @@ import { uploadComposerAttachment, usePromptActions } from '.'
 // never-settling in-flight promise from one test into the next.
 beforeEach(() => {
   clearSingleFlightSessionResumeState()
+  window.localStorage.removeItem('hermes.desktop.preparedSubmissions.v1')
 })
 
 vi.mock('@/hermes', () => ({
@@ -124,6 +125,7 @@ function Harness({
   seedMessages,
   seedStreamId,
   seedTurnStartedAt,
+  rawAdmissionReceipts = false,
   selectedStoredSessionIdRef: selectedStoredSessionIdRefProp,
   storedSessionId,
   activeSessionId,
@@ -149,6 +151,7 @@ function Harness({
   seedMessages?: unknown[]
   seedStreamId?: null | string
   seedTurnStartedAt?: null | number
+  rawAdmissionReceipts?: boolean
   selectedStoredSessionIdRef?: MutableRefObject<string | null>
   storedSessionId?: null | string
   activeSessionId?: null | string
@@ -198,7 +201,19 @@ function Harness({
     handleSkinCommand: () => '',
     openMemoryGraph: openMemoryGraph ?? (() => undefined),
     refreshSessions,
-    requestGateway,
+    // Older fixture peers acknowledged successful submits with an empty object.
+    // Keep those peers successful under the durable protocol; receipt tests opt
+    // out so missing/mismatched acknowledgements still exercise production.
+    requestGateway: async (method, params, timeoutMs) => {
+      const result = await (timeoutMs === undefined ? requestGateway(method, params) : requestGateway(method, params, timeoutMs))
+
+      if (!rawAdmissionReceipts && method === 'prompt.submit' && result && typeof result === 'object' &&
+          (Object.keys(result).length === 0 || ('ok' in result && result.ok === true))) {
+        return { admission_id: params?.submission_id, status: 'started' } as never
+      }
+
+      return result as never
+    },
     resumeStoredSession: resumeStoredSession ?? (() => undefined),
     runtimeIdByStoredSessionIdRef,
     selectedStoredSessionIdRef,
@@ -254,10 +269,13 @@ describe('durable submit acknowledgement', () => {
     $sessions.set([])
     $connection.set(null)
     $composerAttachments.set([])
+
     const requestGateway = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === 'slash.exec') return { type: 'skill', name: 'private-skill', message: 'expanded skill' } as never
+      if (method === 'slash.exec') {return { type: 'skill', name: 'private-skill', message: 'expanded skill' } as never}
+
       return { admission_id: params?.submission_id, status: 'unknown' } as never
     })
+
     let handle: HarnessHandle | null = null
     await actRender(<Harness onReady={h => (handle = h)} refreshSessions={async () => undefined} requestGateway={requestGateway} />)
     expect(await handle!.submitText('/private-skill', { fromQueue: true, submission_id: 'queued-skill' })).toBe(false)
@@ -280,7 +298,7 @@ describe('durable submit acknowledgement', () => {
     const requestGateway = vi.fn(async () => receipt as never)
     let handle: HarnessHandle | null = null
     await actRender(
-      <Harness onReady={h => (handle = h)} refreshSessions={async () => undefined} requestGateway={requestGateway} />
+      <Harness onReady={h => (handle = h)} rawAdmissionReceipts refreshSessions={async () => undefined} requestGateway={requestGateway} />
     )
     const options = { fromQueue: true, submission_id: 'entry-id' }
     expect(await handle!.submitText('keep this input', options)).toBe(accepted)

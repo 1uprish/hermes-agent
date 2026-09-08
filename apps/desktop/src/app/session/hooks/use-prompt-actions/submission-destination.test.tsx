@@ -62,6 +62,7 @@ function setup() {
 }
 
 beforeEach(() => {
+  window.localStorage.clear()
   $sessions.set([])
   $sessionStates.set({})
   $connection.set(null)
@@ -87,6 +88,7 @@ describe('submission intent destinations', () => {
       mode: 'local',
       profile: 'default'
     }
+
     $connection.set(connection as never)
     const request = vi.fn(async () => ({ ok: true }))
     const captured = captureSubmissionDestination(null, request as GatewayRequest)
@@ -104,7 +106,9 @@ describe('submission intent destinations', () => {
       mode: 'local',
       profile: 'default'
     }
+
     const request = vi.fn(async () => ({}))
+
     for (const change of [
       { baseUrl: 'http://other' },
       { wsUrl: 'ws://other/ws' },
@@ -118,28 +122,188 @@ describe('submission intent destinations', () => {
       $connection.set({ ...connection, ...change } as never)
       await expect(captured.requestGateway('prompt.submit')).rejects.toThrow('Submission destination changed')
     }
+
     expect(request).not.toHaveBeenCalled()
   })
   it('reuses a prepared direct submission after ambiguous failure without restaging attachments', async () => {
     const { deps, requestGateway } = setup()
     requestGateway.mockRejectedValueOnce(new Error('connection closed'))
-    const { result, rerender } = renderHook(() => useSubmitPrompt(deps))
+    let hook = renderHook(() => useSubmitPrompt(deps))
     await act(async () => {
-      expect(await result.current('retry me')).toBe(false)
+      expect(await hook.result.current('retry me')).toBe(false)
     })
-    rerender()
+    const journal = window.localStorage.getItem('hermes.desktop.preparedSubmissions.v1')
+    expect(journal).toContain('retry me')
+    hook.unmount()
+    window.localStorage.clear()
+    window.localStorage.setItem('hermes.desktop.preparedSubmissions.v1', journal!)
+    // A same-text send in another profile/session is a different intent; it
+    // must neither reuse nor retire the original uncertain admission.
+    $activeGatewayProfile.set('bob')
+    deps.selectedStoredSessionIdRef.current = 'stored-b'
+    deps.activeSessionIdRef.current = 'runtime-b'
+    deps.runtimeIdByStoredSessionIdRef.current.set('stored-b', 'runtime-b')
+    hook = renderHook(() => useSubmitPrompt(deps))
+    await act(async () => {
+      expect(await hook.result.current('retry me')).toBe(true)
+    })
+    expect(requestGateway.mock.calls[1][1]?.submission_id).not.toBe(requestGateway.mock.calls[0][1]?.submission_id)
+    hook.unmount()
+    $activeGatewayProfile.set('default')
+    deps.selectedStoredSessionIdRef.current = 'stored-a'
+    deps.activeSessionIdRef.current = 'runtime-a'
+    hook = renderHook(() => useSubmitPrompt(deps))
+    const { result } = hook
     await act(async () => {
       expect(await result.current('retry me')).toBe(true)
     })
-    const calls = requestGateway.mock.calls.filter(call => call[0] === 'prompt.submit')
+
+    const calls = requestGateway.mock.calls.filter(
+      call => call[0] === 'prompt.submit' && call[1]?.session_id === 'runtime-a'
+    )
+
     expect(calls).toHaveLength(2)
     expect(calls[1][1]).toEqual(calls[0][1])
-    expect(deps.syncAttachmentsForSubmit).toHaveBeenCalledTimes(1)
+    expect(deps.syncAttachmentsForSubmit).toHaveBeenCalledTimes(2)
     await act(async () => {
       expect(await result.current('retry me')).toBe(true)
     })
-    expect(requestGateway.mock.calls[2][1]?.submission_id).not.toBe(calls[0][1]?.submission_id)
+    expect(requestGateway.mock.calls.at(-1)?.[1]?.submission_id).not.toBe(calls[0][1]?.submission_id)
   })
+
+  it.each([false, true])('keeps new-session %s kickoff identity and expansion across journal reload', async slash => {
+    const { deps, requestGateway } = setup()
+    deps.activeSessionIdRef.current = null
+    deps.selectedStoredSessionIdRef.current = null
+    $connection.set({ connectionId: 'local', profile: 'default', mode: 'local' } as never)
+    deps.createBackendSessionForSend.mockImplementation(async () => {
+      deps.activeSessionIdRef.current = 'runtime-a'
+      deps.selectedStoredSessionIdRef.current = 'stored-a'
+      $sessions.set([{ id: 'stored-a', connection_id: 'local', profile: 'default' }] as never)
+
+      return 'runtime-a' as never
+    })
+    const accepted = new Map<string, Record<string, unknown>>()
+    let loseAck = true
+    let expansions = 0
+    requestGateway.mockImplementation(async (method, params) => {
+      if (method === 'slash.exec') {
+        expansions++
+
+        return {
+          type: 'skill',
+          name: 'private-skill',
+          message: `expanded-${expansions}`,
+          display: '/private-skill'
+        } as never
+      }
+
+      if (method !== 'prompt.submit') {
+        return {} as never
+      }
+
+      const id = String(params?.submission_id)
+      const previous = accepted.get(id)
+
+      if (previous) {
+        expect(params).toEqual(previous)
+      } else {
+        accepted.set(id, params!)
+      }
+
+      if (loseAck) {
+        throw new Error('connection closed')
+      }
+
+      return { admission_id: id, status: 'terminal' } as never
+    })
+    wire.request.mockImplementation((_connection, _profile, method, params) => requestGateway(method, params))
+
+    const mount = () =>
+      renderHook(() => {
+        const submitPromptText = useSubmitPrompt(deps)
+
+        const runSlash = useSlashCommand({
+          ...deps,
+          submitPromptText,
+          appendSessionTextMessage: vi.fn(),
+          branchCurrentSession: async () => true,
+          handleSkinCommand: () => '',
+          handoffSession: async () => ({ ok: true }),
+          openMemoryGraph: vi.fn(),
+          refreshSessions: async () => undefined,
+          startFreshSessionDraft: vi.fn()
+        })
+
+        return slash ? runSlash : submitPromptText
+      })
+
+    const input = slash ? '/private-skill' : 'first prompt'
+    let hook = mount()
+    await act(async () => {
+      expect(await hook.result.current(input)).toBe(false)
+    })
+    const serialized = window.localStorage.getItem('hermes.desktop.preparedSubmissions.v1')
+    expect(serialized).toBeTruthy()
+    expect(Object.values(JSON.parse(serialized!))[0]).toMatchObject({ owner: { connectionId: 'local', profile: 'default' } })
+    hook.unmount()
+    window.localStorage.clear()
+    window.localStorage.setItem('hermes.desktop.preparedSubmissions.v1', serialized!)
+    loseAck = false
+    hook = mount()
+    await act(async () => {
+      expect(await hook.result.current(input)).toBe(true)
+    })
+    expect(accepted.size).toBe(1)
+    expect(deps.createBackendSessionForSend).toHaveBeenCalledTimes(1)
+    expect(deps.syncAttachmentsForSubmit).toHaveBeenCalledTimes(1)
+    expect(expansions).toBe(slash ? 1 : 0)
+  })
+
+  it.each(['missing', 'wrong', 'unknown', '4094', 'lost-legacy'])(
+    'requires a matching receipt or one pre-admission legacy refusal: %s',
+    async mode => {
+      const { deps, requestGateway } = setup()
+      const refusal = Object.assign(new Error('durable admission unsupported'), { code: 4094 })
+      requestGateway.mockImplementation(async (_method, params) => {
+        if (mode === '4094' || mode === 'lost-legacy') {
+          if (params?.submission_id) {
+            throw refusal
+          }
+
+          if (mode === 'lost-legacy') {
+            throw new Error('connection closed')
+          }
+
+          return { ok: true } as never
+        }
+
+        if (mode === 'missing') {
+          return { ok: true } as never
+        }
+
+        return { admission_id: mode === 'wrong' ? 'wrong-id' : params?.submission_id, status: 'unknown' } as never
+      })
+      let hook = renderHook(() => useSubmitPrompt(deps))
+      await act(async () => {
+        expect(await hook.result.current('receipt')).toBe(mode === '4094')
+      })
+      hook.unmount()
+      hook = renderHook(() => useSubmitPrompt(deps))
+
+      if (mode !== '4094') {
+        await act(async () => {
+          expect(await hook.result.current('receipt')).toBe(false)
+        })
+        const attempts = requestGateway.mock.calls.filter(call => call[0] === 'prompt.submit')
+
+        if (mode === 'lost-legacy') { expect(attempts).toHaveLength(2) }
+        const identified = attempts.filter(call => call[1]?.submission_id)
+        expect(new Set(identified.map(call => call[1]?.submission_id)).size).toBe(1)
+        expect(attempts.filter(call => !call[1]?.submission_id)).toHaveLength(mode === 'lost-legacy' ? 1 : 0)
+      }
+    }
+  )
 
   it('assigns one direct ID before preprocessing and keeps it through busy retries', async () => {
     const { deps, requestGateway } = setup()
