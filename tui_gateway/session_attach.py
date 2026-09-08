@@ -152,8 +152,93 @@ async def allow_upgrade(ws) -> bool:
         return True
     pins = {key: ws.query_params.get(f"attach_{key}", "") for key in fields}
     if (not _local_native(ws, web)
-            or any(len(ws.query_params.getlist(f"attach_{key}")) != 1 for key in fields)
-            or not await asyncio.to_thread(_owner_matches, **pins)):
+            or any(len(ws.query_params.getlist(f"attach_{key}")) != 1 for key in fields)):
         await ws.close(code=4409, reason="session owner changed or unavailable")
         return False
+    fence = await asyncio.to_thread(_capture_owner, pins)
+    if fence is None:
+        await ws.close(code=4409, reason="session owner changed or unavailable")
+        return False
+    ws._hermes_attach_fence = fence
     return True
+
+
+def _capture_owner(pins):
+    from tui_gateway import server
+
+    with server._sessions_lock:
+        if not _owner_matches(**pins):
+            return None
+        sid, session = next((sid, session) for sid, session in server._sessions.items()
+                            if session.get("session_key") == pins["session_id"]
+                            and str(Path(session.get("profile_home") or get_hermes_home()).resolve())
+                            == pins["profile_home"])
+        return _OwnerFence(pins, sid, session, session["active_session_lease"])
+
+
+class _OwnerFence:
+    """A discovered socket subscribes to one live record, never the cold-resume path.
+
+    Retain object identity as well as the published lease ID: compression transfers
+    the SAME lease; releasing/reclaiming or replacing the runtime is not migration.
+    """
+
+    def __init__(self, pins, sid, session, lease):
+        self.pins, self.sid, self.session, self.lease = pins, sid, session, lease
+
+    def valid(self):
+        from tui_gateway import server
+
+        with server._sessions_lock:
+            return (server._sessions.get(self.sid) is self.session
+                    and self.session.get("active_session_lease") is self.lease
+                    and _owner_matches(str(self.session.get("session_key") or ""),
+                                       self.pins["lease_id"], self.pins["profile_home"]))
+
+    def __call__(self, req, transport):
+        import contextvars
+        from tui_gateway import server
+        from tui_gateway.transport import bind_transport, reset_transport
+
+        normalized = server._normalize_request(req)
+        if isinstance(normalized, dict):
+            return normalized
+        transport.attach_fence = self
+        token = bind_transport(transport)
+        try:
+            if normalized[1] not in server._LONG_HANDLERS:
+                return self._handle(req)
+            ctx = contextvars.copy_context()
+
+            def run():
+                try:
+                    response = self._handle(req)
+                except Exception:
+                    _log.exception("attached session request failed")
+                    response = server._err(normalized[0], -32603, "internal error")
+                if response is not None:
+                    transport.write(response)
+
+            server._pool.submit(lambda: ctx.run(run))
+            return None
+        finally:
+            reset_transport(token)
+
+    def _handle(self, req):
+        from tui_gateway import server
+
+        rid, method, params = server._normalize_request(req)
+        # Check in the executing worker, not just before it queues. Resume must
+        # stay on this record even if the transcript's profile/name lookup differs.
+        with server._session_resume_lock:
+            if not self.valid():
+                return server._err(rid, 4409, "session owner changed or unavailable")
+            if method == "session.resume":
+                target = params.get("session_id") or params.get("id")
+                if target not in (self.pins["session_id"], self.session["session_key"], self.sid):
+                    return server._err(rid, 4409, "session owner changed or unavailable")
+                ctx = server._Resume(rid, params, self.session["session_key"])
+                return server._resume_reuse_live_locked(ctx, self.sid, self.session)
+            if method == "session.create":
+                return server._err(rid, 4409, "attachment requires the existing session owner")
+        return server.handle_request(req)

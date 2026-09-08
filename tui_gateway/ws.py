@@ -236,7 +236,8 @@ class _SendFailed(Exception):
     """Raised by handle_ws._reply when a reply could not be written: ends the read loop."""
 
 
-async def handle_ws(ws: Any, *, auth_identity: dict | None = None, subprotocol: str | None = None) -> None:
+async def handle_ws(ws: Any, *, auth_identity: dict | None = None, subprotocol: str | None = None,
+                    dispatch=None) -> None:
     """Run one WebSocket session. Wire-compatible with ``tui_gateway.entry``. *auth_identity* is the server-minted
     ``{user_id, provider}`` recorded at WS-upgrade auth, stored as ``WSTransport.auth_identity`` (the only identity
     authority for browser-controller registration); callers that omit it (harnesses, embedded TUI child) get None."""
@@ -330,7 +331,7 @@ async def handle_ws(ws: Any, *, auth_identity: dict | None = None, subprotocol: 
             # writes the response itself via transport.write (a separate thread, so that is the safe
             # path). Inline handlers return the response dict, written here from the loop.
             try:
-                resp = await asyncio.to_thread(server.dispatch, req, transport)
+                resp = await asyncio.to_thread(dispatch or server.dispatch, req, transport)
             except Exception:
                 dispatch_crashes += 1
                 _log.exception("ws dispatch crash peer=%s id=%s method=%s", peer, req_id, req_method)
