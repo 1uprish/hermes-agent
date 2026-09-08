@@ -756,6 +756,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         const submitParams = (targetId: string) => ({
           session_id: targetId,
           text,
+          ...(options?.submission_id !== undefined && { submission_id: options.submission_id }),
           ...(interrupted && { interrupted }),
           // Off-screen widget intent: the gateway types the persisted user
           // row display_kind=hidden so no client renders it as a bubble.
@@ -780,9 +781,9 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         let submitErr: unknown = null
 
         try {
-          const recoverStoredSessionId = targetStoredSessionId ?? selectedStoredSessionIdRef.current
+          const recoverStoredSessionId = targetStoredSessionId
 
-          await withSessionNotFoundResume(
+          const { result } = await withSessionNotFoundResume<{ admission_id?: string; status?: string }>(
             sessionId,
             recoverStoredSessionId,
             liveId =>
@@ -816,6 +817,16 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
             // instead of erroring out and losing the session binding.
             { alsoTimeout: true }
           )
+
+          if (
+            options?.submission_id !== undefined &&
+            (result?.admission_id !== options.submission_id ||
+              !['queued', 'started', 'terminal'].includes(result?.status ?? ''))
+          ) {
+            dropOptimistic(sessionId)
+            releaseBusy()
+            return false
+          }
         } catch (firstErr) {
           if (firstErr instanceof SessionRecoveryAborted) {
             console.warn('[submit-drift-abort]', firstErr.reason, { phase: 'post-resume-retry' })
