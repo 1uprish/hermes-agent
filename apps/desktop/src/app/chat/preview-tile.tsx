@@ -149,6 +149,25 @@ function BrowserTabLabel({ tabId }: { tabId: string }) {
   return target ? browserTabLabel(target, pages[tabId]) : null
 }
 
+function PreviewTabDescription({ tabId }: { tabId: string }) {
+  const pages = useStore($browserPages)
+  const target = targetFor(tabId)
+
+  if (!target) {
+    return null
+  }
+
+  if (target.kind !== 'url') {
+    return target.path || target.source || null
+  }
+
+  try {
+    return new URL(pages[tabId]?.url || target.url).hostname
+  } catch {
+    return null
+  }
+}
+
 /** The tab's lead glyph — the same file/tool icon family the file tree and code
  *  fences resolve through, so a `.tsx` peek and its sidebar row agree. */
 function PreviewTabLead({ tabId }: { tabId: string }) {
@@ -262,6 +281,7 @@ const watchPreviewTileMirror = paneMirror<{ id: string }>({
   title: previewTitle,
   tabLead: tabId => <PreviewTabLead tabId={tabId} />,
   tabTitle: tabId => (targetFor(tabId)?.kind === 'url' ? <BrowserTabLabel tabId={tabId} /> : undefined),
+  tabDescription: tabId => <PreviewTabDescription tabId={tabId} />,
   // A Browser is a vessel, so there can be more of it — a file peek is one of
   // a kind and leaves the strip's "+" to whatever else the zone holds.
   newTab: tabId => (targetFor(tabId)?.kind === 'url' ? newBrowserTab : undefined),

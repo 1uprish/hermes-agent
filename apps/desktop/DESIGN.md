@@ -116,7 +116,7 @@ fill/shadow), `ghost`, `link`, `text` (boxless quiet inline — "Cancel",
 **Sizes:** `default`, `xs`, `sm`, `lg`, `inline` (flush, zero box — for buttons
 that sit inside a heading/sentence; replaces `h-auto px-0 py-0`), `micro`
 (status-stack/table-footers), and the icon family `icon` / `icon-xs` /
-`icon-sm` / `icon-lg` / `icon-titlebar`.
+`icon-sm` / `icon-lg` / `icon-titlebar`. `icon-tab` is the compact 16px circular tab-close control.
 
 **Tooltips only when hover teaches something new.** `<Tip>` is for discovery,
 not a tax on every icon. Ask: does hover reveal something the user cannot
@@ -158,7 +158,7 @@ context-dependent (e.g. "Show" / "Hide"). Never hardcode combos; always use
 
 Notes:
 - Text buttons are square (no radius) and sized by padding + line-height (no
-  fixed heights). Only icon buttons carry the shared 4px radius.
+  fixed heights). Icon buttons carry the shared 4px radius; `icon-tab` is circular.
 - SVGs inherit `size-3.5` (`size-3` at `xs`). Don't re-set icon size.
 - Polymorph with `asChild` when the button must render as a link/Slot.
 
@@ -192,6 +192,28 @@ Sizes: `default`, `xs`, `overlay` (titlebar glyph counts).
   rows. Flat, flush-left; no per-row indentation that fights flush headers.
 - **No dividers between rows** unless the list genuinely needs them; prefer
   spacing. When you do need one, it's a single `--ui-stroke-tertiary` hairline.
+
+## Pane tabs
+
+`PaneTabStrip`, `PaneTab`, and `PaneTabLabel` own horizontal pane chrome.
+Horizontal tabs use the curved shoulders and overlapping feet of
+[chrome-tabs](https://github.com/adamschwartz/chrome-tabs), with the app's
+theme-derived gutter and chrome-surface active tab rather than a separate palette.
+These fills stay opaque under Glass so the silhouette remains visible.
+The active face joins the pane below; inactive neighbors have short separators,
+not boxed borders or an accent underline. Labels are sentence-case, 12px, and
+fade at the trailing edge. Close uses the shared ghost icon button in a reserved
+slot, so it never covers the label. Tabs shrink before the strip scrolls.
+
+Tab hover previews use the shared `Tip` / `TooltipContent` `card` variant:
+600ms initial delay, full title, optional quieter browser host/file path,
+start-aligned below the tab with viewport collision handling. No arrow, no
+focus stealing, and no pointer interception. Other tips keep the marker style.
+
+The existing pane drag/drop, multi-selection, context menus, and middle/⌘-click
+close gestures remain the interaction authority. Collapsed vertical rails retain
+their compact treatment. Geometry lives in `src/components/ui/pane-tab.css`;
+callers supply content and actions, not tab styling.
 
 ## Feedback & empty/error/loading states
 

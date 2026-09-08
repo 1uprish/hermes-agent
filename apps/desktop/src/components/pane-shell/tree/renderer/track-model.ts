@@ -111,6 +111,8 @@ interface PaneChrome extends PaneSizing {
    *  whole panes area, so the label subscribes for itself instead. Absent, or
    *  returning nothing, falls back to `title`. */
   tabTitle?: () => React.ReactNode
+  /** Optional second line in the hover preview (a browser host or file path). */
+  tabDescription?: () => React.ReactNode
 }
 
 export const paneChrome = (c: Contribution | undefined) => (c?.data ?? {}) as PaneChrome

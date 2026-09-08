@@ -39,6 +39,8 @@ export interface PaneMirror<T> {
    *  as `tabLead` — a name that moves faster than re-registration (see
    *  PaneChrome.tabTitle). Falls back to `title`. */
   tabTitle?: (key: string) => ReactNode
+  /** Detail beneath the full title in the shared tab hover card. */
+  tabDescription?: (key: string) => ReactNode
   /** Mint another tile of this kind — the strip's "+" (see PaneChrome.newTab).
    *  Per tile so a mirror can offer it for some of its tabs and not others. */
   newTab?: (key: string) => (() => void) | undefined
@@ -82,6 +84,7 @@ export function paneMirror<T>(cfg: PaneMirror<T>): () => void {
         data: {
           tabLead: cfg.tabLead ? () => cfg.tabLead!(key) : undefined,
           tabTitle: cfg.tabTitle ? () => cfg.tabTitle!(key) : undefined,
+          tabDescription: cfg.tabDescription ? () => cfg.tabDescription!(key) : undefined,
           dock: {
             before: cfg.before?.(tile),
             pane: cfg.anchor?.(tile) ?? 'workspace',

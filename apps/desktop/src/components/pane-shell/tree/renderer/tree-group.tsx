@@ -492,6 +492,7 @@ export function TreeGroup({
         <ZoneMenu {...zoneMenu}>
           <PaneTabStrip
             // data-zone-tabstrip: a drop over here STACKS (drag-session reads it).
+            data-minimized={node.minimized || undefined}
             data-zone-tabstrip={node.id}
             listRef={tabsRef}
             onPointerDown={e =>
@@ -540,6 +541,8 @@ export function TreeGroup({
                   active={isActive}
                   aria-selected={isActive}
                   data-tree-tab={paneId}
+                  hoverDescription={chrome.tabDescription?.()}
+                  hoverTitle={tabLabel(paneId)}
                   key={paneId}
                   onClose={closeable ? () => closeTab(paneId) : undefined}
                   onPointerDown={e => {
@@ -627,7 +630,7 @@ export function TreeGroup({
                   style={{ cursor: 'grab' }}
                 >
                   {chrome.tabLead ? (
-                    <span className="ml-2 -mr-1 flex shrink-0 items-center">{chrome.tabLead()}</span>
+                    <span className="pane-tab-lead">{chrome.tabLead()}</span>
                   ) : null}
                   <PaneTabLabel>{tabLabel(paneId)}</PaneTabLabel>
                 </PaneTab>

@@ -1,3 +1,5 @@
+import './pane-tab.css'
+
 import * as React from 'react'
 
 import { type MenuKit, renderActionItem } from '@/components/ui/actions-menu'
@@ -12,25 +14,15 @@ import { cn } from '@/lib/utils'
 export const PANE_TAB_STRIP_LINE_LEFT = 'shadow-[inset_1px_0_0_var(--ui-stroke-tertiary)]'
 export const PANE_TAB_STRIP_LINE_RIGHT = 'shadow-[inset_-1px_0_0_var(--ui-stroke-tertiary)]'
 
-// `--tab-face` is the tab's EFFECTIVE surface color — what actually sits under
-// the label after every wash lands. The hover close-button gradient fades into
-// it, so the fade is seamless on any theme. Idle hover repaints it below with
-// the same color-mix the darkening wash applies.
-//
-// `--tab-bg` is the base every wash mixes onto. Under Glass the surface tokens
-// are transparent and the <body> field is what shows through a tab, so the
-// base prefers `--glass-field` (styles.css sets it only under glass, on
-// `data-glass-field` declarers) and falls back to the tab's own surface token.
+// Vertical rails retain their glass-aware surface. Horizontal faces and
+// gutters are resolved together in pane-tab.css so their contrast survives Glass.
 const TAB =
   'group/tab relative flex shrink-0 items-center border-transparent bg-(--tab-bg) text-[0.6875rem] font-medium [-webkit-app-region:no-drag] [--tab-face:var(--tab-bg)] [--tab-bg:var(--glass-field,var(--tab-surface))]'
 
-// Full height: with the strip's rule removed there is no last-pixel row to
-// leave uncovered, so tabs fill the bar and no sliver of gutter shows through.
-const TAB_HORIZONTAL = 'h-full min-w-0 max-w-48 not-first:border-l not-first:border-l-(--ui-stroke-quaternary)'
+// Horizontal tabs share Chrome's curved silhouette; vertical rails stay compact.
+const TAB_HORIZONTAL = 'pane-tab-horizontal min-w-0'
 
-// A closeable tab's floor: 8px label inset + the ~19px opaque ✕ chip, so the
-// shortest labels (FILES, REVIEW) clear the chip and pass under nothing but the
-// gradient. A floor, not padding — a tab already wider than it pays nothing.
+// Closeable tabs keep a floor; horizontal geometry reserves the close slot.
 const TAB_CLOSEABLE = 'min-w-13'
 
 const TAB_VERTICAL =
@@ -39,32 +31,22 @@ const TAB_VERTICAL =
 const TAB_ACTIVE =
   'h-full text-foreground [--tab-surface:var(--pane-tab-active-bg,var(--ui-editor-surface-background))]'
 
-// Horizontal only: the active tab is the sole seam on the strip — a
-// theme-primary underline drawn as an inset shadow in its own last pixel row,
-// so it costs no layout and can't shift the tab.
-const TAB_ACTIVE_UNDERLINE = 'shadow-[inset_0_-2px_0_var(--pane-tab-active-accent,var(--theme-primary))]'
-
-// Inactive = gutter, defaulting to the shared chrome surface so a strip that
-// sets no vars still matches the sidebar/titlebar instead of falling through to
-// the raw (unmixed) card seed. Hover DARKENS: surfaces this close in value need
-// a darkening wash to register at all. `--tab-face` tracks the wash — the same
-// mix flattened onto `--tab-bg` — so the close gradient matches what shows.
+// Vertical rails keep their existing darkening hover wash.
 const TAB_IDLE =
   'text-(--ui-text-tertiary) [--tab-surface:var(--pane-tab-strip-bg,var(--ui-sidebar-surface-background))] hover:shadow-[inset_0_0_0_100vmax_color-mix(in_srgb,#000_var(--ui-tab-hover-darken),transparent)] hover:[--tab-face:color-mix(in_srgb,#000_var(--ui-tab-hover-darken),var(--tab-bg))] hover:text-(--ui-text-secondary)'
 
-// A tab riding a multi-tab selection: an accent wash over whatever surface the
-// tab sits on. A background-image gradient (not a shadow) so it stacks cleanly
-// over `--tab-bg` without fighting the active underline / hover shadows.
-// `--tab-face` gets the same wash flattened in, keeping the close fade honest.
+// Selected rails use an accent wash; horizontal faces get the same tint in CSS.
 const TAB_SELECTED =
   '[background-image:linear-gradient(color-mix(in_srgb,var(--ui-accent)_14%,transparent),color-mix(in_srgb,var(--ui-accent)_14%,transparent))] [--tab-face:color-mix(in_srgb,var(--ui-accent)_14%,var(--tab-bg))] text-foreground'
 
 interface PaneTabProps extends React.ComponentProps<'div'> {
   active?: boolean
   dirty?: boolean
-  /** Close verb. Horizontal tabs reveal a hover ✕ on the right (a `--tab-face`
-   *  gradient fades it over the label); middle-click and ⌘-click always work,
-   *  and stay the only gestures on vertical rails (no room for a chip ✕).
+  hoverTitle?: React.ReactNode
+  hoverDescription?: React.ReactNode
+  /** Close verb. Horizontal tabs reserve a compact ✕ on the right;
+   *  middle-click and ⌘-click always work, and stay the only gestures on
+   *  vertical rails (no room for a chip ✕).
    *  There is no way to take the ✕ off a tab that HAS this verb: the chip and
    *  the pointer gestures are one affordance, so a closeable tab always says
    *  so. Omit `onClose` to make a tab uncloseable. */
@@ -89,9 +71,13 @@ export const PaneTab = React.forwardRef<HTMLDivElement, PaneTabProps>(function P
   {
     active = false,
     dirty = false,
+    hoverTitle,
+    hoverDescription,
     onClose,
     onMouseDown,
     onPointerDown,
+    onPointerDownCapture,
+    onContextMenuCapture,
     onPointerUp,
     onClickCapture,
     selected = false,
@@ -107,17 +93,16 @@ export const PaneTab = React.forwardRef<HTMLDivElement, PaneTabProps>(function P
   // that rule, and a per-tab border stacked a second translucent line over it.
   const edge = vertical ? (side === 'right' ? 'border-l' : 'border-r') : undefined
   const middle = middleClickHandlers(onClose)
+  const [previewOpen, setPreviewOpen] = React.useState(false)
 
-  return (
+  const tab = (
     <div
       className={cn(
         TAB,
         vertical ? TAB_VERTICAL : TAB_HORIZONTAL,
         !vertical && onClose && TAB_CLOSEABLE,
         edge,
-        active
-          ? cn(TAB_ACTIVE, !vertical && TAB_ACTIVE_UNDERLINE)
-          : cn(TAB_IDLE, edge && `${edge}-(--ui-stroke-tertiary)`),
+        active ? TAB_ACTIVE : cn(TAB_IDLE, edge && `${edge}-(--ui-stroke-tertiary)`),
         selected && TAB_SELECTED,
         className
       )}
@@ -136,6 +121,10 @@ export const PaneTab = React.forwardRef<HTMLDivElement, PaneTabProps>(function P
         }
 
         onClickCapture?.(event)
+      }}
+      onContextMenuCapture={event => {
+        setPreviewOpen(false)
+        onContextMenuCapture?.(event)
       }}
       onMouseDown={event => {
         middle.onMouseDown(event)
@@ -157,6 +146,11 @@ export const PaneTab = React.forwardRef<HTMLDivElement, PaneTabProps>(function P
 
         onPointerDown?.(event)
       }}
+      onPointerDownCapture={event => {
+        // Pane drag handlers prevent default before Radix can dismiss the tip.
+        setPreviewOpen(false)
+        onPointerDownCapture?.(event)
+      }}
       onPointerUp={event => {
         middle.onPointerUp(event)
         onPointerUp?.(event)
@@ -164,59 +158,70 @@ export const PaneTab = React.forwardRef<HTMLDivElement, PaneTabProps>(function P
       ref={ref}
       {...props}
     >
+      {!vertical && <span aria-hidden className="pane-tab-background" />}
+      {!vertical && <span aria-hidden className="pane-tab-divider" />}
       {children}
       {dirty && (
         <span
           aria-hidden
           className={cn(
             'pointer-events-none absolute grid size-4 place-items-center',
-            vertical ? 'bottom-1.5 left-1/2 -translate-x-1/2' : 'right-1.5 top-1/2 -translate-y-1/2'
+            vertical ? 'bottom-1.5 left-1/2 -translate-x-1/2' : 'pane-tab-dirty right-3 top-1/2 -translate-y-1/2'
           )}
         >
           <span className="size-2 rounded-full bg-amber-500 shadow-[0_0_0_2px_var(--tab-bg),0_1px_2px_rgba(0,0,0,0.45)] dark:bg-amber-400" />
         </span>
       )}
       {onClose && !vertical && (
-        // Hover ✕, painted OVER the label's right edge as an overlay (no
-        // layout shift, tab width never jumps on hover). The runway is a tiny
-        // transparent→`--tab-face` gradient, so the button melts into the
-        // tab's effective surface instead of hard-clipping the text under it.
-        // Short labels are kept legible by TAB_CLOSEABLE, not by padding.
-        // Rendered after the dirty dot: on hover the ✕ takes the dot's spot,
-        // VS Code-style.
-        <span className="pointer-events-none absolute inset-y-0 right-0 flex items-stretch opacity-0 transition-opacity group-hover/tab:pointer-events-auto group-hover/tab:opacity-100">
-          {/* Both pieces re-draw the active underline: they paint over the
-              tab's own last-pixel row, so without it the ✕ would bite a
-              notch out of the accent line on the active tab. */}
-          <span
-            aria-hidden
-            className="w-4 bg-linear-to-r from-transparent to-(--tab-face) group-data-[active=true]/tab:shadow-[inset_0_-2px_0_var(--pane-tab-active-accent,var(--theme-primary))]"
-          />
-          <button
+        <span className="pane-tab-close">
+          <Button
             aria-label={translateNow('common.close')}
-            className="grid cursor-pointer place-items-center bg-(--tab-face) pr-1.5 pl-0.5 text-(--ui-text-tertiary) outline-none hover:text-foreground group-data-[active=true]/tab:shadow-[inset_0_-2px_0_var(--pane-tab-active-accent,var(--theme-primary))]"
             onClick={event => {
               event.preventDefault()
               event.stopPropagation()
               onClose()
             }}
             onPointerDown={event => {
-              // Claim a plain left press so the shell can't also activate or
-              // drag the tab. Middle/⌘ presses bubble on purpose — the tab's
-              // own close gestures already route them.
+              // Closing must never also activate or start dragging the tab.
               if (event.button === 0 && !isMetaClose(event)) {
                 event.stopPropagation()
               }
             }}
+            size="icon-tab"
             tabIndex={-1}
             type="button"
+            variant="ghost"
           >
             <Codicon name="close" size="0.6875rem" />
-          </button>
+          </Button>
         </span>
       )}
     </div>
   )
+
+  return !vertical && hoverTitle ? (
+    <Tip
+      align="start"
+      alignOffset={9}
+      collisionPadding={8}
+      delayDuration={600}
+      label={
+        <>
+          <div className="text-xs font-medium leading-5 break-words">{hoverTitle}</div>
+          {hoverDescription && (
+            <div className="mt-1 text-[11px] leading-4 break-all text-(--ui-text-secondary)">{hoverDescription}</div>
+          )}
+        </>
+      }
+      onOpenChange={setPreviewOpen}
+      open={previewOpen}
+      side="bottom"
+      sideOffset={4}
+      variant="card"
+    >
+      {tab}
+    </Tip>
+  ) : tab
 })
 
 interface PaneTabLabelProps extends React.ComponentProps<'button'> {
@@ -225,10 +230,8 @@ interface PaneTabLabelProps extends React.ComponentProps<'button'> {
   as?: 'button' | 'span'
 }
 
-/** Truncating label inside a `PaneTab`. `className` merges into the text span
- *  (e.g. `normal-case tracking-normal` for filenames). On a closeable tab the
- *  text clips instead of ellipsizing, so it runs under the hover ✕ fade rather
- *  than stopping short of it with dots. */
+/** Truncating label inside a `PaneTab`. `className` merges into the text span.
+ *  Horizontal labels fade before the reserved close slot, never underneath it. */
 export const PaneTabLabel = React.forwardRef<HTMLElement, PaneTabLabelProps>(function PaneTabLabel(
   { as = 'span', className, children, ...props },
   ref
@@ -237,7 +240,7 @@ export const PaneTabLabel = React.forwardRef<HTMLElement, PaneTabLabelProps>(fun
 
   return (
     <Comp
-      className="flex h-full min-w-0 max-w-full items-center overflow-hidden px-2 text-left outline-none group-data-[vertical]/tab:h-auto group-data-[vertical]/tab:w-full group-data-[vertical]/tab:justify-center group-data-[vertical]/tab:py-2"
+      className="pane-tab-label flex h-full min-w-0 max-w-full items-center overflow-hidden px-2 text-left outline-none group-data-[vertical]/tab:h-auto group-data-[vertical]/tab:w-full group-data-[vertical]/tab:justify-center group-data-[vertical]/tab:py-2"
       ref={ref}
       {...props}
     >
@@ -277,18 +280,16 @@ export const PaneTabStrip = React.forwardRef<HTMLDivElement, PaneTabStripProps>(
 ) {
   return (
     <div
-      // Strip and active tab both sit on the sidebar surface, so the bar reads
-      // as one piece of chrome with the titlebar above it. No bottom rule — the
-      // active tab's primary underline is the only seam.
+      // The active tab flows into the pane surface; the gutter stays chrome.
       className={cn(
-        'group/pane-header relative flex h-7 shrink-0 select-none bg-(--ui-sidebar-surface-background) [-webkit-app-region:no-drag] [--pane-tab-active-bg:var(--ui-sidebar-surface-background)]',
+        'pane-tab-strip group/pane-header relative flex shrink-0 select-none bg-(--ui-sidebar-surface-background) [-webkit-app-region:no-drag]',
         className
       )}
       ref={ref}
       {...props}
     >
       <div
-        className="flex min-w-0 flex-1 overflow-x-auto overflow-y-hidden overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className="pane-tab-list flex min-w-0 flex-1 overflow-x-auto overflow-y-hidden overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         ref={listRef}
         role="tablist"
       >

@@ -1,0 +1,219 @@
+/* Curved tab geometry adapted from https://github.com/adamschwartz/chrome-tabs.
+ * The MIT License (MIT) — Copyright (c) 2013 Adam Schwartz
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+
+.pane-tab-strip {
+  /* Surface aliases become transparent under Glass. These solid theme seeds
+     keep the active silhouette readable without changing the window's glass. */
+  --pane-tab-active-bg: var(--ui-bg-chrome);
+  --pane-tab-strip-bg: color-mix(in srgb, var(--ui-base) 12%, var(--ui-bg-chrome));
+  --pane-tab-height: 36px;
+  height: 46px;
+  background: var(--pane-tab-strip-bg);
+  isolation: isolate;
+}
+
+:root.dark .pane-tab-strip {
+  --pane-tab-strip-bg: var(--theme-neutral-sidebar);
+}
+
+/* Minimized column tracks are still 28px; the restore handle must fit. */
+.pane-tab-strip[data-minimized] {
+  --pane-tab-height: 24px;
+  height: 28px;
+}
+
+.pane-tab-strip[data-minimized] .pane-tab-list {
+  padding-block: 4px 0;
+}
+
+.pane-tab-strip::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  height: 4px;
+  background: var(--pane-tab-active-bg);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.pane-tab-list {
+  align-items: flex-end;
+  /* Every tab overlaps, including tabs inside display:contents menu wrappers. */
+  padding: 8px 3px 2px 22px;
+}
+
+.pane-tab-horizontal {
+  --tab-bg: var(--pane-tab-active-bg, var(--ui-bg-chrome));
+  --tab-face: var(--tab-bg);
+  flex: 0 1 258px;
+  height: var(--pane-tab-height, 36px);
+  min-width: 84px;
+  max-width: 258px;
+  padding-inline: 17px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ui-text-secondary);
+  z-index: 1;
+}
+
+.pane-tab-list .pane-tab-horizontal {
+  margin-left: -19px;
+}
+
+/* Only the body accepts input; an overlapping transparent shoulder must not
+   steal the close button or drag handle of its neighbor. */
+.pane-tab-horizontal {
+  pointer-events: none;
+}
+
+.pane-tab-horizontal::after {
+  content: '';
+  position: absolute;
+  inset: 0 9px;
+  border-radius: 8px 8px 0 0;
+  pointer-events: auto;
+}
+
+.pane-tab-horizontal > :is(.pane-tab-label, .pane-tab-lead, .pane-tab-close) {
+  pointer-events: auto;
+}
+
+.pane-tab-horizontal:hover {
+  --tab-face: color-mix(in srgb, var(--tab-bg) 65%, var(--pane-tab-strip-bg));
+  box-shadow: none;
+  z-index: 2;
+}
+
+.pane-tab-horizontal[data-active='true'] {
+  --tab-face: var(--tab-bg);
+  color: var(--ui-text-primary);
+  z-index: 3;
+}
+
+.pane-tab-horizontal[data-selected] {
+  --tab-face: color-mix(in srgb, var(--ui-accent) 14%, var(--tab-bg));
+}
+
+/* Three pieces keep the 8px shoulders and 9px feet circular at every width. */
+.pane-tab-background {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(var(--tab-face), var(--tab-face)) center / calc(100% - 32px) 100% no-repeat;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.pane-tab-background::before,
+.pane-tab-background::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 17px;
+  background: var(--tab-face);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 17 36' preserveAspectRatio='none'%3E%3Cpath d='M17 0v36H0v-2c4.5 0 9-3.5 9-8V8c0-4.5 3.5-8 8-8z'/%3E%3C/svg%3E") 0 0 / 17px var(--pane-tab-height) no-repeat;
+}
+
+.pane-tab-background::after {
+  left: auto;
+  right: 0;
+  transform: scaleX(-1);
+}
+
+.pane-tab-horizontal:is([data-active='true'], [data-selected], :hover, :focus-within) > .pane-tab-background {
+  opacity: 1;
+}
+
+.pane-tab-divider {
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  right: 9px;
+  width: 1px;
+  background: var(--ui-stroke-secondary);
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.pane-tab-horizontal:is([data-active='true'], [data-selected], :hover, :focus-within) > .pane-tab-divider,
+.pane-tab-horizontal:has(+ .pane-tab-horizontal:is([data-active='true'], [data-selected], :hover, :focus-within)) > .pane-tab-divider,
+.pane-tab-list > :has(+ .contents > .pane-tab-horizontal:is([data-active='true'], [data-selected], :hover, :focus-within)) .pane-tab-divider,
+.pane-tab-list > :nth-last-child(1 of :is(.pane-tab-horizontal, .contents)) .pane-tab-divider {
+  opacity: 0;
+}
+
+.pane-tab-lead {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  min-width: 16px;
+  margin-right: 8px;
+}
+
+.pane-tab-horizontal > .pane-tab-label {
+  position: relative;
+  flex: 1;
+  padding-inline: 0;
+  z-index: 1;
+}
+
+.pane-tab-horizontal > .pane-tab-label > span {
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  text-overflow: clip;
+  mask-image: linear-gradient(to right, black calc(100% - 12px), transparent);
+}
+
+/* Keep domain-owned lead icons above the tab face without wrapping the label:
+   drag hit-testing and context-menu refs still point at the original shell. */
+.pane-tab-horizontal > :not(.pane-tab-background, .pane-tab-divider, .pane-tab-dirty, .pane-tab-close) {
+  position: relative;
+  z-index: 1;
+}
+
+.pane-tab-close {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: 4px;
+  z-index: 1;
+}
+
+.pane-tab-horizontal:has(.pane-tab-dirty):not(:hover, :focus-within) > .pane-tab-close {
+  visibility: hidden;
+}
+
+.pane-tab-horizontal:has(.pane-tab-close):is(:hover, :focus-within) > .pane-tab-dirty {
+  visibility: hidden;
+}
+
+.pane-tab-horizontal > .pane-tab-dirty {
+  z-index: 1;
+}
+
+.pane-tab-list > :not(.pane-tab-horizontal) {
+  align-self: center;
+  flex-shrink: 0;
+}
