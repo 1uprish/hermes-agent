@@ -298,6 +298,9 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
         queue_generation = int(session.get("_queued_prompt_generation", 0))
         _ac_set_queue(session, session.get("queued_prompts") or [])
         session["running"] = True
+        # Reset only the previous turn's Stop while claiming the next turn. A
+        # later Stop still latches cancellation and invalidates queue_generation.
+        session["_turn_cancel_requested"] = False
         queued_transport = queued.get("transport")
         # The queuer's transport is pinned so the drained turn reaches the client that sent it — but
         # ATTACHED, not rebound: a mid-turn prompt from a second client used to silence the first for the
