@@ -93,12 +93,18 @@ function TooltipTrigger({ onFocus, ...props }: React.ComponentProps<typeof Toolt
   )
 }
 
+interface TooltipContentProps extends React.ComponentProps<typeof TooltipPrimitive.Content> {
+  /** Tab previews use a full surface instead of the compact marker label. */
+  variant?: 'label' | 'card'
+}
+
 function TooltipContent({
   className,
   sideOffset = 6,
   children,
+  variant = 'label',
   ...props
-}: React.ComponentProps<typeof TooltipPrimitive.Content>) {
+}: TooltipContentProps) {
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
@@ -109,7 +115,13 @@ function TooltipContent({
         // elapses the chip appears at once.
         // pointer-events-none: the tip must never steal hover/clicks from the
         // chrome underneath (titlebar tools, adjacent tabs, etc.).
-        className={cn('pointer-events-none z-(--z-over-modal) w-fit max-w-64 select-none', className)}
+        className={cn(
+          'pointer-events-none z-(--z-over-modal) select-none',
+          variant === 'card'
+            ? 'w-64 max-w-[calc(100vw-1rem)] rounded-lg border border-(--ui-stroke-secondary) bg-(--ui-bg-elevated) p-3 text-(--ui-text-primary) shadow-md'
+            : 'w-fit max-w-64',
+          className
+        )}
         data-slot="tooltip-content"
         sideOffset={sideOffset}
         {...props}
@@ -122,18 +134,22 @@ function TooltipContent({
             (#62022); an atomic inline child (`inline-flex`) sits on the baseline
             and hangs its extra lines below the background, dark-on-dark. Force
             direct children inline; break lines with `<br />`. */}
-        <span className="box-decoration-clone inline bg-foreground px-1.5 py-1 text-[11px] font-bold leading-normal text-background [font-family:Arial,sans-serif] [&>*]:!inline">
-          {children}
-        </span>
+        {variant === 'card' ? children : (
+          <span className="box-decoration-clone inline bg-foreground px-1.5 py-1 text-[11px] font-bold leading-normal text-background [font-family:Arial,sans-serif] [&>*]:!inline">
+            {children}
+          </span>
+        )}
       </TooltipPrimitive.Content>
     </TooltipPrimitive.Portal>
   )
 }
 
-interface TipProps extends Omit<React.ComponentProps<typeof TooltipPrimitive.Content>, 'content'> {
+interface TipProps extends Omit<TooltipContentProps, 'content'> {
   label: React.ReactNode
   children: React.ReactNode
   delayDuration?: number
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }
 
 // Drop-in replacement for native `title=`: wrap any single element. Instant,
@@ -155,7 +171,7 @@ interface TipProps extends Omit<React.ComponentProps<typeof TooltipPrimitive.Con
 // tried and reverted. `asChild` puts `data-slot="tooltip-trigger"` on the
 // child element itself, so arming REPLACES that node — which broke 18 tests
 // encoding that contract, and risks focus/ref identity at every call site.
-function Tip({ label, children, delayDuration = TIP_DELAY_MS, ...props }: TipProps) {
+function Tip({ label, children, delayDuration = TIP_DELAY_MS, open, onOpenChange, ...props }: TipProps) {
   // A component rendered in isolation (every unit test, and any surface
   // mounted outside the app root) has no provider above it, and Radix throws
   // "`Tooltip` must be used within `TooltipProvider`". Fall back to a local
@@ -168,7 +184,7 @@ function Tip({ label, children, delayDuration = TIP_DELAY_MS, ...props }: TipPro
   }
 
   const tip = (
-    <Tooltip delayDuration={delayDuration} disableHoverableContent>
+    <Tooltip delayDuration={delayDuration} disableHoverableContent onOpenChange={onOpenChange} open={open}>
       <TooltipTrigger asChild>{children}</TooltipTrigger>
       <TooltipContent {...props}>{label}</TooltipContent>
     </Tooltip>
