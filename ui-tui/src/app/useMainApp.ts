@@ -846,7 +846,7 @@ export function useMainApp(gw: GatewayClient) {
   const onEvent = useMemo(
     () =>
       createGatewayEventHandler({
-        composer: { setInput: composerActions.setInput },
+        composer: { setInput: composerActions.setInput, enqueue: composerActions.enqueue },
         gateway,
         session: {
           STARTUP_RESUME_ID,
@@ -871,6 +871,7 @@ export function useMainApp(gw: GatewayClient) {
       appendMessage,
       bellOnComplete,
       bellOnPrompt,
+      composerActions.enqueue,
       composerActions.setInput,
       gateway,
       panel,

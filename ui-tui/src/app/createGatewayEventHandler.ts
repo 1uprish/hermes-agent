@@ -29,6 +29,7 @@ import { applyDelegationStatus, getDelegationState } from './delegationStore.js'
 import type { GatewayEventHandlerContext } from './interfaces.js'
 import { getOverlayState, patchOverlayState } from './overlayStore.js'
 import { flashGoodVibes, flashPet } from './petFlashStore.js'
+import { captureDestination, isCurrentDestination } from './submissionDestination.js'
 import { turnController } from './turnController.js'
 import { getTurnState } from './turnStore.js'
 import { getUiState, patchUiState } from './uiStore.js'
@@ -431,7 +432,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
   }
 
   const { appendMessage, panel, setHistoryItems } = ctx.transcript
-  const { setInput } = ctx.composer
+  const { setInput, enqueue } = ctx.composer
   const { submitLiteralRef, submitRef } = ctx.submission
   const { setProcessing: setVoiceProcessing, setRecording: setVoiceRecording, setVoiceEnabled } = ctx.voice
 
@@ -782,11 +783,29 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
         return
       case 'session.info': {
-        const info = ev.payload
+        const current = getUiState().info
+        const incoming = ev.payload
+
+        if (incoming.profile_name && current?.profile_name && incoming.profile_name !== current.profile_name) {
+          return
+        }
+
+        if (
+          current?.execution_generation !== undefined &&
+          (incoming.execution_generation === undefined || incoming.execution_generation < current.execution_generation)
+        ) {
+          return
+        }
+
+        const info = { ...current, ...incoming }
 
         // A replayed snapshot can be the only terminal signal after reconnect.
         // Missing running on older gateways must not clear a live turn.
-        if (info.running === false) {
+        if (incoming.running === true) {
+          patchUiState({ busy: true, status: 'running…' })
+        }
+
+        if (incoming.running === false) {
           turnController.clearStatusTimer()
           turnController.idle()
           setStatus('ready')
@@ -1021,7 +1040,14 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
           return
         }
 
+        const destination = captureDestination()
         void getFullConfigOnce().then(cfg => {
+          if (!isCurrentDestination(destination)) {
+            enqueue?.(text, text, destination)
+
+            return
+          }
+
           const submitMode = normalizeVoiceSubmitMode(cfg?.config?.voice?.submit_mode)
 
           if (submitMode === 'draft') {
@@ -1034,7 +1060,13 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
           // is committed before submit reads it; invalid config also falls
           // back to this established direct-submit behavior.
           setInput('')
-          setTimeout(() => submitRef.current(text), 0)
+          setTimeout(() => {
+            if (isCurrentDestination(destination)) {
+              submitRef.current(text)
+            } else {
+              enqueue?.(text, text, destination)
+            }
+          }, 0)
         })
 
         return

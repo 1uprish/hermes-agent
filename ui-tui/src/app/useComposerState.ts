@@ -28,6 +28,7 @@ import type {
   UseComposerStateResult
 } from './interfaces.js'
 import { $isBlocked } from './overlayStore.js'
+import { captureDestination, isCurrentDestination } from './submissionDestination.js'
 import { getUiState } from './uiStore.js'
 
 const TOKEN_MAX_COUNT = 32
@@ -129,6 +130,7 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
   const { querier } = useStdin() as { querier: Parameters<typeof readOsc52Clipboard>[0] }
 
   const {
+    stage,
     queueRef,
     queueEditRef,
     queuedDisplay,
@@ -389,6 +391,7 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
   )
 
   const openEditor = useCallback(async () => {
+    const destination = captureDestination()
     const dir = mkdtempSync(join(tmpdir(), 'hermes-'))
     const file = join(dir, 'prompt.md')
     const [cmd, ...args] = resolveEditor()
@@ -412,19 +415,26 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
         return
       }
 
+      if (!isCurrentDestination(destination)) {
+        enqueue(text, text, destination)
+
+        return
+      }
+
       setInput('')
       setInputBuf([])
       submitRef.current(text)
     } finally {
       rmSync(dir, { force: true, recursive: true })
     }
-  }, [input, inputBuf, setInput, submitRef])
+  }, [enqueue, input, inputBuf, setInput, submitRef])
 
   const actions = useMemo(
     () => ({
       attachClipboardImage,
       attachImagePath,
       clearIn,
+      stage,
       dequeue,
       enqueue,
       handleTextPaste,
@@ -445,6 +455,7 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
       attachClipboardImage,
       attachImagePath,
       clearIn,
+      stage,
       dequeue,
       enqueue,
       handleTextPaste,

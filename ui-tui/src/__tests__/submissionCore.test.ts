@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { isSessionBusyError, markSubmitting, submitPrompt, type SubmitPromptDeps } from '../app/submissionCore.js'
+import { captureDestination } from '../app/submissionDestination.js'
 import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
 import type { GatewayClient } from '../gatewayClient.js'
 
@@ -148,6 +149,50 @@ describe('submissionCore.submitPrompt — literal submissions (startup -q querie
 
     expect(submitted).toEqual(['/model $(rm -rf ~)'])
   })
+})
+
+it('keeps the submit destination across preprocessing and never mutates the newly focused session', async () => {
+  resetUiState()
+  patchUiState({ sid: 'original' })
+  const { gw, resolveDrop } = makeDeferredGateway()
+  const deps = makeDeps(gw)
+  submitPrompt('private', deps)
+  patchUiState({ sid: 'other', busy: false, status: 'other ready' })
+  resolveDrop()
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(gw.request).toHaveBeenCalledWith(
+    'prompt.submit',
+    expect.objectContaining({ session_id: 'original', text: 'private' })
+  )
+  expect(deps.appendMessage).not.toHaveBeenCalled()
+  expect(getUiState()).toMatchObject({ sid: 'other', busy: false, status: 'other ready' })
+})
+
+it('retains a queued submission on ambiguous response and retries the exact identity until durable acknowledgement', async () => {
+  resetUiState()
+  patchUiState({ sid: 'owner' })
+  const settle = vi.fn()
+  const item = { text: 'private', display: 'private', submissionId: 'stable-id', settle }
+
+  const request = vi.fn().mockResolvedValueOnce({ status: 'streaming' }).mockResolvedValueOnce({
+    admission_id: 'stable-id',
+    target_session_id: 'owner',
+    target_profile_home: captureDestination().profileHome,
+    status: 'queued'
+  })
+
+  const deps = makeDeps({ request } as unknown as GatewayClient)
+  submitPrompt(item.text, deps, true, undefined, { skipDetectDrop: true, queueItem: item })
+  await Promise.resolve()
+  expect(settle).toHaveBeenLastCalledWith(false)
+  submitPrompt(item.text, deps, true, undefined, { skipDetectDrop: true, queueItem: item })
+  await Promise.resolve()
+  expect(request.mock.calls.map(call => call[1])).toEqual([
+    { session_id: 'owner', text: 'private', submission_id: 'stable-id', queued: true },
+    { session_id: 'owner', text: 'private', submission_id: 'stable-id', queued: true }
+  ])
+  expect(settle).toHaveBeenLastCalledWith(true)
 })
 
 describe('submissionCore.markSubmitting', () => {
