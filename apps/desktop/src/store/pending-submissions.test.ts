@@ -11,17 +11,34 @@ beforeEach(() => {
 it('reconciles server queue by identity without replaying or duplicating local entries', () => {
   enqueueQueuedPrompt('chat', { id: 'one', text: 'same', attachments: [] })
   enqueueQueuedPrompt('chat', { id: 'local', text: 'same', attachments: [] })
-  const snapshot = [{ admission_id: 'one', status: 'queued', text: 'same' }]
+  const snapshot = [{ admission_id: 'one', status: 'queued', user: 'same' }]
   reconcilePendingSubmissions('chat', snapshot)
   reconcilePendingSubmissions('chat', snapshot)
   expect(getQueuedPrompts('chat').map(entry => entry.id)).toEqual(['one', 'local'])
   expect(getQueuedPrompts('chat')[0]?.serverStatus).toBe('queued')
   reconcilePendingSubmissions('chat', [{ ...snapshot[0], status: 'started' }])
   expect(getQueuedPrompts('chat').map(entry => entry.id)).toEqual(['local'])
-  reconcilePendingSubmissions('chat', [{ admission_id: 'unknown', status: 'unknown', text: 'interrupted' }])
+  reconcilePendingSubmissions('chat', [{ admission_id: 'unknown', status: 'unknown', user: 'interrupted' }])
   expect(getQueuedPrompts('chat').find(entry => entry.id === 'unknown')?.serverStatus).toBe('unknown')
   reconcilePendingSubmissions('chat', [])
   expect(getQueuedPrompts('chat').map(entry => entry.id)).toEqual(['local'])
+})
+
+it('recovers remote pending text into the queue and journal without a local submission', () => {
+  const snapshot = [
+    { admission_id: 'remote-queued', status: 'queued', user: 'queued elsewhere' },
+    { admission_id: 'remote-unknown', status: 'unknown', user: 'interrupted elsewhere' }
+  ]
+
+  reconcilePendingSubmissions('chat', snapshot)
+  reconcilePendingSubmissions('chat', snapshot)
+  expect(getQueuedPrompts('chat').map(({ id, text, serverStatus }) => ({ id, text, serverStatus })))
+    .toEqual(snapshot.map(({ admission_id, user, status }) => ({ id: admission_id, text: user, serverStatus: status })))
+  const journal = JSON.parse(window.localStorage.getItem('hermes.desktop.pendingSubmissions.v1')!)
+
+  for (const receipt of snapshot) {
+    expect(journal.chat[receipt.admission_id].text).toBe(receipt.user)
+  }
 })
 
 it('persists identified direct submissions independently of the automatic local queue', () => {
