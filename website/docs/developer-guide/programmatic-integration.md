@@ -59,6 +59,57 @@ terminal.resize         clipboard.paste         image.attach
 
 Within one authenticated gateway, resuming or activating a live session attaches another event subscriber rather than replacing the previous connection. Streaming and terminal events go to all attached clients; disconnecting one client does not end a session another client is viewing. Existing submit exclusivity and configured busy-input policy remain in force. Attached clients can steer the session's subagents; browser-controller results still require the connection that registered that controller. This does not enable independent gateway processes to write the same session, nor does it imply durable prompt admission across an owner restart.
 
+### Durable human prompt admission
+
+In-process `prompt.submit` accepts an optional `submission_id`: a nonempty string
+of at most 200 characters, chosen once per human submission and retained on retry.
+The profile-scoped SQLite inbox commits before acknowledging input. Results include:
+
+```json
+{"admission_id":"client-generated-id","status":"queued","outcome":null,
+ "target_session_id":"stored-session-id","target_profile_home":"/profile/home"}
+```
+
+`status` is `queued`, `started`, or `terminal`; retries of work started by a previous
+owner report `unknown`. Identical retries return the original receipt, not a second
+admission. Reusing an ID for another payload, intent, or session returns error
+`4093`. The original stored target and compression lineage are immutable; its
+canonical compression successor can recover the queue, but a branch cannot.
+IDs are isolated by profile: an acceptance in another profile is not an acceptance
+here. Attached image paths are captured at first acceptance; retries neither
+require repasting them nor consume a later paste.
+
+`queued: true` forces the existing safe-boundary queue. Otherwise the configured
+busy-input mode still applies: accepted steer/redirect uses the live agent's
+correction mechanism, never a synthetic user turn inserted mid-loop. A concrete
+correction refusal falls back to the queue; an exception with uncertain correction
+consumption is terminal with `outcome: "correction_unknown"`, not automatically
+retried. Runtime-only automation callbacks and transports remain in memory and
+are never JSON-serialized into the human inbox.
+
+- `prompt.pending({session_id})` returns `pending_submissions`, with the receipt
+  fields above plus `user` (the submitted text/content).
+- `prompt.cancel({session_id, admission_id})` returns the receipt. Only `queued`
+  work becomes `terminal` / `cancelled`; already-started/unknown work is not
+  restarted or cancelled by this operation. Use the explicit session interrupt
+  operation for an active execution.
+- Resume reconstructs only never-started submissions, in FIFO order, through the
+  existing owner queue. Started work left by process death remains inspectable as
+  `unknown`, even if a crash marker exists. This is **exactly-once admission**, not
+  a promise of exactly-once arbitrary tool effects.
+
+Terminal `session.info` authority includes integer `execution_generation`,
+`execution_state` (`complete`, `error`, or `interrupted`), and `running: false`.
+Generations for durable sessions advance across owner restarts. Stale finalizers
+cannot release a newer generation, and ordinary cleanup failures do not prevent
+terminal settlement. No elapsed-time heuristic clears an active execution.
+
+Omitting `submission_id` preserves the legacy behavior. Durable IDs currently
+require ordinary human, in-process turns: hosted internal callbacks, isolated
+compute workers, and rewind/truncation requests are refused with `4094` rather
+than falsely claiming durable admission. Storage failures return `5071` (or the
+existing session-storage errors); malformed IDs return `4004`.
+
 ### Rewinding history on `prompt.submit`
 
 A rewind / edit / regenerate is a `prompt.submit` that drops part of the stored transcript before running the new turn. Because that write is a destructive rewrite of the session's durable rows, the gateway honors it only when the client states its intent:

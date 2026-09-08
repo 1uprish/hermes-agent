@@ -62,6 +62,13 @@ def _maybe_schedule_auto_continue(sid: str, session: dict, session_key: str) -> 
     # its execution generation and duplicate work.
     if session.get("source") == "bot_room":
         return None
+    from tui_gateway.prompt_admission import restore_pending, admission_snapshot
+    restore_pending(session)
+    pending = admission_snapshot(session)["pending_submissions"]
+    if pending:
+        if any(row["status"] == "queued" for row in pending):
+            _drain_queued_prompt("__admission_resume__", sid, session)
+        return None  # Started/unknown human work is never generic auto-continue input.
     home = _session_home(session)
     if (marker := read_turn_marker(home, session_key)) is None:
         return None
@@ -141,7 +148,7 @@ def _enqueue_prompt(session: dict, text: Any, transport: Any, image_paths: list[
     queued = {"text": text, "transport": transport, **({"image_paths": image_paths} if image_paths else {})}
     existing = session.get("queued_prompt")
     if (existing and text_only and isinstance(existing.get("text"), str)
-            and not existing.get("image_paths") and not session.get("queued_prompts")):
+            and not existing.get("image_paths") and not existing.get("admission_id") and not session.get("queued_prompts")):
         prev = existing["text"]
         existing["text"] = f"{prev}\n\n{text}" if prev and text else (prev or text)
     elif existing:
@@ -161,6 +168,8 @@ def _sanitize_queued_entry_vs_inflight_user(entry: Any, original: str) -> dict |
     """
     if not isinstance(entry, dict):
         return None
+    if entry.get("admission_id"):
+        return entry  # Identity, not text equality, defines accepted human work.
     text = entry.get("text")
     if not original or entry.get("image_paths") or not isinstance(text, str):
         return entry
@@ -281,6 +290,8 @@ def _handle_busy_submit(rid, sid: str, session: dict, text: Any, transport: Any,
 def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
     """Fire a queued next-turn prompt if one is waiting and the session is idle. True when dispatched: the caller
     skips lower-priority follow-ups this cycle (the user's message wins)."""
+    from tui_gateway.prompt_admission import restore_pending, claim_admission
+    restore_pending(session)
     with session["history_lock"]:
         if session.get("_closing") or not (queued := session.get("queued_prompt")) or session.get("running"):
             return False
@@ -309,7 +320,14 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
         kwargs["image_paths"] = queued["image_paths"]
     dispatch_failed = False
     try:
-        if not use_compute_host:
+        if queued.get("admission_id"):
+            from tui_gateway.prompt_admission import run_queued_admission
+            if not claim_admission(session, queued["admission_id"]):
+                with session["history_lock"]:
+                    session["running"] = False
+                return _drain_queued_prompt(rid, sid, session)
+            run_queued_admission(rid, sid, session, queued, kwargs)
+        elif not use_compute_host:
             _run_prompt_submit(rid, sid, session, queued["text"], **kwargs)
         elif (resp := _submit_prompt_to_compute_host(rid, sid, session, queued["text"], **kwargs)).get("error"):
             with session["history_lock"]:
