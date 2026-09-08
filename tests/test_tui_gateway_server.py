@@ -715,7 +715,6 @@ def test_prompt_submit_golden_transcript_matches_flag_off_and_on(monkeypatch):
             }
 
     fixed_info = {"model": "gold-model", "provider": "gold-provider", "usage": {"total": 15}}
-    usage = server._get_usage(_Agent())
     monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
     monkeypatch.setattr(server, "_ensure_session_db_row", lambda _session: None)
     monkeypatch.setattr(server, "_persist_branch_seed", lambda _session: None)
@@ -728,7 +727,7 @@ def test_prompt_submit_golden_transcript_matches_flag_off_and_on(monkeypatch):
 
     def run_flag_off():
         events = []
-        monkeypatch.setattr(server, "_emit", lambda event, sid, payload=None: events.append((event, sid, payload)))
+        monkeypatch.setattr(server, "write_json", lambda frame: events.append(frame["params"]))
         monkeypatch.setattr(server, "_load_cfg", lambda: {"dashboard": {"turn_isolation": False}})
         server._sessions["sid"] = _session(
             agent=_Agent(), model_override={"model": "gold-model", "provider": "gold-provider"}
@@ -744,29 +743,33 @@ def test_prompt_submit_golden_transcript_matches_flag_off_and_on(monkeypatch):
 
     def run_flag_on():
         events = []
-        monkeypatch.setattr(server, "_emit", lambda event, sid, payload=None: events.append((event, sid, payload)))
+        monkeypatch.setattr(server, "write_json", lambda frame: events.append(frame["params"]))
         monkeypatch.setattr(server, "_load_cfg", lambda: {"dashboard": {"turn_isolation": True}})
+
+        from tui_gateway.compute_host import ComputeHost
+
+        # Exercise the real child turn/event producer instead of hand-writing an
+        # obsolete transcript. Only agent construction and process IPC are faked.
+        host = ComputeHost(heartbeat_secs=0)
+        child = _session(agent=_Agent(), model_override={
+            "model": "gold-model", "provider": "gold-provider"})
+        monkeypatch.setattr(host, "_ensure_server_session", lambda _server, _frame: child)
 
         class _FakeSupervisor:
             def submit_turn(self, frame, *, on_complete=None):
                 sid = frame["sid"]
-                server._emit("message.start", sid)
-                server._emit("message.delta", sid, {"text": "hi"})
-                server._emit("message.complete", sid, {"text": "hi", "usage": usage, "status": "complete"})
-                server._emit("session.info", sid, dict(fixed_info))
+                parent = server._sessions[sid]
+                frames = []
+                monkeypatch.setattr(host, "emit", frames.append)
+                server._sessions[sid] = child
+                try:
+                    host._run_real_turn(frame)
+                finally:
+                    server._sessions[sid] = parent
+                    host.close()
+                assert [f["type"] for f in frames] == ["turn.started", "turn.end"]
                 if on_complete is not None:
-                    on_complete(
-                        {
-                            "type": "turn.end",
-                            "sid": sid,
-                            "request_id": frame["request_id"],
-                            "session_key": "session-key",
-                            "history_version": 1,
-                            "message_count": 2,
-                            "session_info": dict(fixed_info),
-                            "session_info_emitted": True,
-                        }
-                    )
+                    on_complete(frames[-1])
                 return frame["request_id"]
 
         monkeypatch.setattr(server, "_get_compute_host_supervisor", lambda _cfg=None: _FakeSupervisor())
@@ -787,7 +790,31 @@ def test_prompt_submit_golden_transcript_matches_flag_off_and_on(monkeypatch):
         finally:
             server._sessions.pop("sid", None)
 
-    assert run_flag_on() == run_flag_off()
+    def normalized(events):
+        start = next(event["payload"] for event in events if event["type"] == "message.start")
+        complete = next(event["payload"] for event in events if event["type"] == "message.complete")
+        settled = next(event["payload"] for event in events
+                       if event["type"] == "session.info" and "execution_state" in event["payload"])
+        assert start["execution_epoch"]
+        assert start["execution_generation"] > 0
+        assert start["execution_state"] == "running" and start["running"] is True
+        assert settled["execution_state"] == "complete" and settled["running"] is False
+        for payload in (complete, settled):
+            assert payload["execution_epoch"] == start["execution_epoch"]
+            assert payload["execution_generation"] == start["execution_generation"]
+        assert complete["text"] == "hi" and complete["status"] == "complete"
+        assert complete["usage"] == server._get_usage(_Agent())
+        # Epochs identify processes and generations identify executions, not
+        # snapshot literals. Compare the full transcript after rebinding them.
+        return [
+            {**event, "payload": {
+                key: ("<epoch>" if key == "execution_epoch" else
+                      "<generation>" if key == "execution_generation" else value)
+                for key, value in event.get("payload", {}).items()
+            }} for event in events
+        ]
+
+    assert normalized(run_flag_on()) == normalized(run_flag_off())
 
 
 def test_session_context_explicit_cwd_for_ephemeral_task(monkeypatch, tmp_path):
@@ -16784,7 +16811,7 @@ def test_session_activate_returns_inflight_stream_before_completion(monkeypatch)
     monkeypatch.setattr(server, "make_stream_renderer", lambda cols: None)
     monkeypatch.setattr(server, "render_message", lambda raw, cols: None)
     monkeypatch.setattr(server, "_get_db", lambda: None)
-    monkeypatch.setattr(server, "_session_info", lambda agent: {"model": agent.model})
+    monkeypatch.setattr(server, "_session_info", lambda agent, session=None: {"model": agent.model})
 
     def _emit(event, sid, payload=None):
         if event == "message.complete":
@@ -16851,7 +16878,7 @@ def test_session_activate_returns_prompt_queued_during_busy_turn(monkeypatch):
     that copy without leaking the transport object.
     """
     monkeypatch.setattr(server, "_load_busy_input_mode", lambda: "queue")
-    monkeypatch.setattr(server, "_session_info", lambda agent: {"model": agent.model})
+    monkeypatch.setattr(server, "_session_info", lambda agent, session=None: {"model": agent.model})
     agent = types.SimpleNamespace(model="model-live")
     session = _session(
         agent=agent,
@@ -16884,7 +16911,7 @@ def test_session_activate_returns_prompt_queued_during_busy_turn(monkeypatch):
 
 
 def test_session_activate_switches_live_session_without_closing_siblings(monkeypatch):
-    monkeypatch.setattr(server, "_session_info", lambda agent: {"model": agent.model})
+    monkeypatch.setattr(server, "_session_info", lambda agent, session=None: {"model": agent.model})
     server._sessions["sid-a"] = _session(
         agent=types.SimpleNamespace(model="model-a"),
         history=[{"role": "user", "content": "old"}],
@@ -16921,7 +16948,7 @@ def test_session_activate_switches_live_session_without_closing_siblings(monkeyp
 
 
 def test_session_activate_can_omit_duplicate_desktop_transcript(monkeypatch):
-    monkeypatch.setattr(server, "_session_info", lambda agent: {"model": agent.model})
+    monkeypatch.setattr(server, "_session_info", lambda agent, session=None: {"model": agent.model})
     server._sessions["sid-large"] = _session(
         agent=types.SimpleNamespace(model="model-large"),
         history=[
@@ -21859,7 +21886,10 @@ def test_prompt_submit_consecutive_rewinds_with_returned_survivor_row_ids(
         db._conn.commit()
     original_row_ids = [m["_row_id"] for m in msgs]
 
-    sess = _session(history=[dict(m) for m in msgs], session_key=session_key)
+    sess = _session(
+        history=[dict(m) for m in msgs], session_key=session_key,
+        _compute_host_active=turn_isolation,
+    )
     sid = "real-db-consec-rewind-sid"
     server._sessions[sid] = sess
     monkeypatch.setattr(server, "_get_db", lambda: db)
@@ -21874,7 +21904,10 @@ def test_prompt_submit_consecutive_rewinds_with_returned_survivor_row_ids(
         lambda *_args, **_kwargs: server._ok("host", {"status": "streaming"}),
     )
     monkeypatch.setattr(server, "_start_agent_build", lambda *a, **k: None)
-    monkeypatch.setattr(server, "_start_inflight_turn", lambda *a, **k: None)
+    # Truncation is synchronous, but inline execution now owns a second thread.
+    # Stop at the actual runner seam, not the unrelated inflight projection.
+    run_prompt = Mock(return_value=True)
+    monkeypatch.setattr(server, "_run_prompt_submit", run_prompt)
 
     try:
         # Rewind 1: cut before "third" (last user turn). Survivors: turns
@@ -21912,6 +21945,14 @@ def test_prompt_submit_consecutive_rewinds_with_returned_survivor_row_ids(
             str(original_row_ids[5]): None,
         }
         assert "999999" not in row_id_map
+        if not turn_isolation:
+            sess["_run_thread"].join(timeout=2)
+            assert not sess["_run_thread"].is_alive()
+            assert run_prompt.call_args.args[:4] == ("1", sid, sess, "rewound third")
+        active_prefix = db.get_messages_as_conversation(session_key, include_row_ids=True)
+        assert [m["_row_id"] for m in active_prefix] == [
+            m["_row_id"] for m in sess["history"]
+        ]
         sess["running"] = False
 
         # Rewind 2a: the STALE pre-rewind id for "second" must fail closed.
@@ -21931,6 +21972,7 @@ def test_prompt_submit_consecutive_rewinds_with_returned_survivor_row_ids(
         assert stale_resp.get("error") is not None
         assert stale_resp["error"]["code"] == 4018
         assert len(sess["history"]) == 4  # nothing cut
+        assert db.get_messages_as_conversation(session_key, include_row_ids=True) == active_prefix
 
         # Rewind 2b: the RETURNED survivor id for "second" must succeed.
         resp2 = server.handle_request(
@@ -21954,8 +21996,19 @@ def test_prompt_submit_consecutive_rewinds_with_returned_survivor_row_ids(
         # And the second response rebinds again: one surviving user turn.
         survivors2 = resp2["result"].get("survivor_user_row_ids")
         assert isinstance(survivors2, list) and len(survivors2) == 1
+        assert survivors2 == [sess["history"][0]["_row_id"]]
+        assert set(survivors2).isdisjoint(survivors)
+        if not turn_isolation:
+            sess["_run_thread"].join(timeout=2)
+            assert not sess["_run_thread"].is_alive()
+            assert run_prompt.call_count == 2
+        else:
+            run_prompt.assert_not_called()
     finally:
+        if (worker := sess.get("_run_thread")) is not None:
+            worker.join(timeout=2)
         server._sessions.pop(sid, None)
+        db.close()
 
 
 def test_prompt_submit_rebind_map_clears_active_row_hidden_by_sequence_repair(
