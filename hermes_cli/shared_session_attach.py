@@ -5,8 +5,11 @@ registry entry is discovery information, not authority to mint a credential.
 """
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
+import os
+import stat
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
@@ -27,6 +30,32 @@ def _local_origin(url: str, scheme: str) -> tuple[str, int]:
             or parts.password is not None or parts.fragment or not parts.port):
         raise ValueError("Shared runtime endpoint must be an explicit loopback address and port.")
     return host, parts.port
+
+
+def _authorization(home: Path, endpoint: str) -> str:
+    directory = home / "runtime" / "session-attach"
+    path = directory / (hashlib.sha256(endpoint.encode()).hexdigest() + ".json")
+    try:
+        if os.name != "posix" or directory.resolve() != directory:
+            raise ValueError("Private owner discovery is unavailable.")
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
+            raise ValueError("Private owner discovery directory is not private.")
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "r", encoding="utf-8") as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077
+                    or info.st_uid != os.getuid() or info.st_size > 65536):
+                raise ValueError("Private owner credential is not private.")
+            record = json.load(stream)
+        if (record.get("shared_runtime_url") != endpoint or record.get("profile_home") != str(home)
+                or not isinstance(record.get("authorization"), str)
+                or not record["authorization"].startswith("Bearer ")
+                or any(c in record["authorization"] for c in "\r\n")):
+            raise ValueError("Private owner credential identity does not match.")
+        return record["authorization"]
+    except (OSError, json.JSONDecodeError, AttributeError) as exc:
+        raise ValueError("Private owner credential is unavailable; owner left intact.") from exc
 
 
 def discover_attach_url(session_id: str, *, registry_home: str | Path | None = None) -> str | None:
@@ -58,7 +87,8 @@ def discover_attach_url(session_id: str, *, registry_home: str | Path | None = N
         # Ignore proxy env and redirects: local discovery must stay on the
         # advertised endpoint, including on machines with corporate proxies.
         with httpx.Client(trust_env=False, follow_redirects=False, timeout=3.0) as client:
-            with client.stream("GET", endpoint.rstrip("/") + "/api/session-attach?" + query) as response:
+            with client.stream("GET", endpoint.rstrip("/") + "/api/session-attach?" + query,
+                               headers={"Authorization": _authorization(home, endpoint)}) as response:
                 response.raise_for_status()
                 body = bytearray()
                 for chunk in response.iter_bytes():
