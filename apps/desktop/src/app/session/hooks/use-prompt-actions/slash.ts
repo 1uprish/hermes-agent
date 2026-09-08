@@ -61,6 +61,7 @@ import type {
 
 import { queueKickoffIfSessionBusy } from './queue-if-busy'
 import { resolveTargetSessionId } from './resolve-target-session'
+import { captureSubmissionDestination } from './submission-destination'
 import {
   type GatewayRequest,
   isSessionIdCandidate,
@@ -174,7 +175,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
     handoffSession,
     openMemoryGraph,
     refreshSessions,
-    requestGateway,
+    requestGateway: ambientRequestGateway,
     resumeStoredSession,
     selectedStoredSessionIdRef,
     startFreshSessionDraft,
@@ -185,7 +186,19 @@ export function useSlashCommand(deps: SlashCommandDeps) {
   const compressInFlightRef = useRef(new Set<string>())
 
   return useCallback(
-    async (rawCommand: string, options?: { sessionId?: string; recordInput?: boolean }) => {
+    async (rawCommand: string, options?: { sessionId?: string; recordInput?: boolean; submission_id?: string }) => {
+      const initialRuntimeId = options?.sessionId ?? activeSessionIdRef.current
+      const initialSelectedId = selectedStoredSessionIdRef.current
+      const initialRoutedId = getRoutedStoredSessionId()
+
+      const initialStoredId = options?.sessionId
+        ? ($sessionStates.get()[options.sessionId]?.storedSessionId ?? null)
+        : (initialRoutedId ?? initialSelectedId)
+
+      const destination = captureSubmissionDestination(initialStoredId ?? initialRuntimeId, ambientRequestGateway)
+      const requestGateway = destination.requestGateway
+      const submissionId = options?.submission_id ?? crypto.randomUUID()
+
       // Resolve the session this command targets through the SHARED ladder that
       // submit.ts uses. A slash command runs backend commands against a runtime
       // session, and per-session state (`/goal`, `/usage`, `/status`) is keyed by
@@ -197,13 +210,13 @@ export function useSlashCommand(deps: SlashCommandDeps) {
       // goal" for a goal that was live on the real chat.
       const ensureSessionId = async (sessionHint?: string, preview?: null | string) =>
         resolveTargetSessionId({
-          activeRuntimeId: activeSessionIdRef.current,
+          activeRuntimeId: initialRuntimeId,
           createSession: () => createBackendSessionForSend(preview),
           explicitRuntimeId: sessionHint,
           getRuntimeIdForStoredSession,
           requestGateway,
-          routedStoredSessionId: getRoutedStoredSessionId(),
-          selectedStoredSessionId: selectedStoredSessionIdRef.current
+          routedStoredSessionId: initialRoutedId,
+          selectedStoredSessionId: initialSelectedId
         })
 
       // Resolve the target session plus a writer for inline slash output, or
@@ -232,7 +245,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
         // to updateSessionState re-keyed the tile's cache entry onto the
         // primary's stored session. Fall back to the selection only for a
         // session with no published state yet (a draft this call just created).
-        const storedSessionId = $sessionStates.get()[sessionId]?.storedSessionId ?? selectedStoredSessionIdRef.current
+        const storedSessionId = $sessionStates.get()[sessionId]?.storedSessionId ?? initialStoredId
 
         // Header carries the command token only. The full invocation would
         // duplicate long args — `/goal <prose>` echoed the whole goal in the
@@ -374,7 +387,13 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           // its kickoff as a user message into whatever conversation was on
           // screen. Every other target the dispatcher serves (tile, background
           // queue drain, a session created by this very call) had the same leak.
-          await submitPromptText(message, { sessionId, storedSessionId, displayText })
+          await submitPromptText(message, {
+            sessionId,
+            storedSessionId,
+            displayText,
+            submission_id: submissionId,
+            destination
+          })
         }
 
         try {
@@ -1230,7 +1249,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
       handoffSession,
       openMemoryGraph,
       refreshSessions,
-      requestGateway,
+      ambientRequestGateway,
       resumeStoredSession,
       selectedStoredSessionIdRef,
       startFreshSessionDraft,
