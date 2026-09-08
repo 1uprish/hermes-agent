@@ -186,16 +186,20 @@ export function useSlashCommand(deps: SlashCommandDeps) {
   const compressInFlightRef = useRef(new Set<string>())
 
   return useCallback(
-    async (rawCommand: string, options?: { sessionId?: string; recordInput?: boolean; submission_id?: string }) => {
+    async (rawCommand: string, options?: SubmitTextOptions & { recordInput?: boolean }) => {
       const initialRuntimeId = options?.sessionId ?? activeSessionIdRef.current
       const initialSelectedId = selectedStoredSessionIdRef.current
       const initialRoutedId = getRoutedStoredSessionId()
 
-      const initialStoredId = options?.sessionId
-        ? ($sessionStates.get()[options.sessionId]?.storedSessionId ?? null)
-        : (initialRoutedId ?? initialSelectedId)
+      let submitted = true
+      const initialStoredId =
+        options?.storedSessionId ??
+        (options?.sessionId
+          ? ($sessionStates.get()[options.sessionId]?.storedSessionId ?? null)
+          : (initialRoutedId ?? initialSelectedId))
 
-      const destination = captureSubmissionDestination(initialStoredId ?? initialRuntimeId, ambientRequestGateway)
+      const destination =
+        options?.destination ?? captureSubmissionDestination(initialStoredId ?? initialRuntimeId, ambientRequestGateway)
       const requestGateway = destination.requestGateway
       const submissionId = options?.submission_id ?? crypto.randomUUID()
 
@@ -361,14 +365,16 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           // rather than re-reading the globals — a session switch between
           // dispatch and this branch would otherwise queue the kickoff on
           // whichever chat is now in front (#63352).
-          const queued = queueKickoffIfSessionBusy({
-            displayText,
-            foregroundBusy: busyRef.current,
-            id: submissionId,
-            sessionId,
-            storedSessionId,
-            text: message
-          })
+          const queued = options?.fromQueue
+            ? 'idle'
+            : queueKickoffIfSessionBusy({
+                displayText,
+                foregroundBusy: busyRef.current,
+                id: submissionId,
+                sessionId,
+                storedSessionId,
+                text: message
+              })
 
           if (queued !== 'idle') {
             renderSlashOutput(
@@ -388,7 +394,8 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           // its kickoff as a user message into whatever conversation was on
           // screen. Every other target the dispatcher serves (tile, background
           // queue drain, a session created by this very call) had the same leak.
-          await submitPromptText(message, {
+          submitted = await submitPromptText(message, {
+            ...options,
             sessionId,
             storedSessionId,
             displayText,
@@ -1235,7 +1242,9 @@ export function useSlashCommand(deps: SlashCommandDeps) {
         }
       }
 
-      await runSlash(rawCommand, options?.sessionId, options?.recordInput ?? true)
+      await runSlash(rawCommand, options?.sessionId ?? undefined, options?.recordInput ?? true)
+
+      return submitted
     },
     [
       activeSessionIdRef,

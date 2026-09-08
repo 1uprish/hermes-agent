@@ -78,11 +78,34 @@ afterEach(() => {
 })
 
 describe('submission intent destinations', () => {
+  it('reuses a prepared direct submission after ambiguous failure without restaging attachments', async () => {
+    const { deps, requestGateway } = setup()
+    requestGateway.mockRejectedValueOnce(new Error('connection closed'))
+    const { result, rerender } = renderHook(() => useSubmitPrompt(deps))
+    await act(async () => {
+      expect(await result.current('retry me')).toBe(false)
+    })
+    rerender()
+    await act(async () => {
+      expect(await result.current('retry me')).toBe(true)
+    })
+    const calls = requestGateway.mock.calls.filter(call => call[0] === 'prompt.submit')
+    expect(calls).toHaveLength(2)
+    expect(calls[1][1]).toEqual(calls[0][1])
+    expect(deps.syncAttachmentsForSubmit).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      expect(await result.current('retry me')).toBe(true)
+    })
+    expect(requestGateway.mock.calls[2][1]?.submission_id).not.toBe(calls[0][1]?.submission_id)
+  })
+
   it('assigns one direct ID before preprocessing and keeps it through busy retries', async () => {
     const { deps, requestGateway } = setup()
     let attempts = 0
     requestGateway.mockImplementation(async (_method, params) => {
-      if (++attempts === 1) {throw new Error('session busy')}
+      if (++attempts === 1) {
+        throw new Error('session busy')
+      }
 
       return { admission_id: params?.submission_id, status: 'started' } as never
     })
@@ -180,12 +203,16 @@ describe('submission intent destinations', () => {
     wire.request.mockImplementation(async (connection, profile, method) => {
       requests.push([connection, profile, method])
 
-      if (method === 'slash.exec') {return gate.promise}
+      if (method === 'slash.exec') {
+        return gate.promise
+      }
 
       return { type: 'skill', name: 'private-skill', message: 'expanded private skill' }
     })
     deps.requestGateway = vi.fn(async (method: string) => {
-      if (method === 'slash.exec') {return gate.promise}
+      if (method === 'slash.exec') {
+        return gate.promise
+      }
 
       return { type: 'skill', name: 'private-skill', message: 'expanded private skill' }
     }) as GatewayRequest
@@ -205,7 +232,7 @@ describe('submission intent destinations', () => {
       })
     )
 
-    let pending!: Promise<void>
+    let pending!: Promise<boolean>
     await act(async () => {
       pending = result.current('/private-skill')
     })
