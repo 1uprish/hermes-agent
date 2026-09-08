@@ -651,6 +651,9 @@ async def _token_auth_seam(request: Request, call_next):
     routes pass through untouched.
     """
     from hermes_cli.dashboard_auth.token_auth import token_auth_middleware
+    from tui_gateway.session_attach import ATTACH_PATH, handshake
+    if request.url.path == ATTACH_PATH:
+        return await handshake(request)
     return await token_auth_middleware(request, call_next)
 
 

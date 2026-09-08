@@ -29,9 +29,10 @@ def _claim_active_session_slot(
 ) -> tuple[Any, str | None]:
     try:
         from hermes_cli.active_sessions import try_acquire_active_session
+        from tui_gateway.session_attach import owner_metadata
         return try_acquire_active_session(
             session_id=session_key, surface=surface, config=_load_cfg(), registry_home=profile_home,
-            metadata={"live_session_id": live_session_id, "bot_live_delivery_consumer": True},
+            metadata=owner_metadata(live_session_id, profile_home),
             track_liveness=str(surface or "").strip().lower() == "desktop")
     except Exception as exc:
         logger.warning("Failed to claim active session slot: %s", exc)
@@ -138,8 +139,9 @@ def _transfer_active_session_slot(sid: str, session: dict, *, new_session_id: st
         return True
     try:
         from hermes_cli.active_sessions import transfer_active_session
-        if transfer_active_session(lease, session_id=new_session_id, metadata={
-                "live_session_id": sid, "bot_live_delivery_consumer": True}):
+        from tui_gateway.session_attach import owner_metadata
+        if transfer_active_session(lease, session_id=new_session_id,
+                                   metadata=owner_metadata(sid, session.get("profile_home"))):
             return True
     except Exception:
         logger.debug("Failed to transfer active session slot", exc_info=True)

@@ -542,6 +542,9 @@ async def pty_ws(ws: WebSocket) -> None:
 async def gateway_ws(ws: WebSocket) -> None:
     if not await _close_unless_sidecar_allowed(ws):
         return
+    from tui_gateway.session_attach import allow_upgrade
+    if not await allow_upgrade(ws):
+        return
     from tui_gateway.ws import handle_ws
 
     # The authenticated identity (ticket / internal credential) stamped by
