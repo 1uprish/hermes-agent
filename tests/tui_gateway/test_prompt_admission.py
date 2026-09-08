@@ -30,6 +30,18 @@ def submit(text="later", submission_id="stable", **kw):
                     submission_id=submission_id, queued=True, **kw))
 
 
+def test_busy_admission_publishes_pending_snapshot_for_other_viewers(monkeypatch, tmp_path):
+    session = owner(monkeypatch, tmp_path)
+    events = []
+    monkeypatch.setattr(server, "_emit", lambda *args: events.append(args))
+    response = submit(text="queued elsewhere Ω")["result"]
+    snapshots = [payload for kind, sid, payload in events if kind == "session.info" and sid == "ui"]
+    assert snapshots
+    assert snapshots[-1]["stored_session_id"] == session["session_key"]
+    assert [(r["admission_id"], r["status"], r["user"]) for r in snapshots[-1]["pending_submissions"]] == [
+        (response["admission_id"], "queued", "queued elsewhere Ω")]
+
+
 def test_busy_admission_is_durable_before_ack_and_restart_reconstructs_fifo(monkeypatch, tmp_path):
     session = owner(monkeypatch, tmp_path)
     session["attached_images"] = ["/owned/image.png"]
