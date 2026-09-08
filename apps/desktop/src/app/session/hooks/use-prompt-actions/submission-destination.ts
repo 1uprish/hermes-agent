@@ -21,14 +21,33 @@ export function captureSubmissionDestination(
 ): SubmissionDestination {
   const captured = capturedRequests.get(request)
 
-  if (captured) {return captured}
+  if (captured) {
+    return captured
+  }
   const knownOwner = knownOwnerForSession(sessionId)
   const owner = knownOwner && typeof knownOwner === 'object' ? Object.freeze({ ...knownOwner }) : knownOwner
-  const connection = $connection.get()
+  // Window visibility, logs and registry discovery replace this descriptor.
+  // Only transport/auth authority may invalidate an in-flight write.
+  const authority = () => {
+    const connection = $connection.get()
+    return (
+      connection &&
+      JSON.stringify([
+        connection.baseUrl,
+        connection.wsUrl,
+        connection.token,
+        connection.connectionId,
+        connection.mode,
+        connection.profile,
+        connection.authMode
+      ])
+    )
+  }
+  const connectionAuthority = authority()
   const profile = $activeGatewayProfile.get()
 
   const guardedRequest: GatewayRequest = (method, params, timeoutMs) => {
-    if (connection !== $connection.get() || profile !== $activeGatewayProfile.get()) {
+    if (connectionAuthority !== authority() || profile !== $activeGatewayProfile.get()) {
       return Promise.reject(new Error('Submission destination changed; retry from the original session'))
     }
 
