@@ -1660,6 +1660,24 @@ def cmd_chat(args):
 
     _resolve_chat_session_args(args, use_tui)
 
+    # Attach-only clients borrow the owner's provider and lease, never initialize
+    # a second agent (including when this profile has no local credentials).
+    if getattr(args, "resume", None):
+        from hermes_cli.shared_session_attach import discover_attach_url
+        try:
+            attach_url = discover_attach_url(args.resume)
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            raise SystemExit(1) from None
+        if attach_url:
+            if getattr(args, "query", None) or getattr(args, "query_file", None):
+                print("Live shared sessions require interactive attachment; omit --query/--query-file.", file=sys.stderr)
+                raise SystemExit(2)
+            if use_tui:
+                return _launch_tui(args.resume, tui_dev=getattr(args, "tui_dev", False), attach_url=attach_url)
+            from hermes_cli.shared_session_cli import run_attached_cli
+            return run_attached_cli(attach_url, args.resume)
+
     _warn_retired_xai_models()
 
     # First-run guard: check if any provider is configured before launching

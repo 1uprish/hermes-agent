@@ -714,7 +714,8 @@ def _launch_tui(
     provider: Optional[str] = None, toolsets: object = None, skills: object = None,
     verbose: Optional[bool] = None, quiet: bool = False, query: Optional[str] = None,
     image: Optional[str] = None, worktree: bool = False, checkpoints: bool = False,
-    pass_session_id: bool = False, max_turns: Optional[int] = None, accept_hooks: bool = False):
+    pass_session_id: bool = False, max_turns: Optional[int] = None, accept_hooks: bool = False,
+    attach_url: Optional[str] = None):
     """Replace current process with the TUI."""
     from hermes_cli.main import PROJECT_ROOT
     tui_dir = PROJECT_ROOT / "ui-tui"
@@ -724,6 +725,10 @@ def _launch_tui(
     # the single factory; keep secrets (the TUI/agent needs provider creds).
     from tools.environments.local import build_subprocess_env
     env = build_subprocess_env(scrub_secrets=False, inherit_profile_home=True)
+    # Preserve the already-authorized endpoint: rediscovery could observe owner
+    # exit and silently fall back to spawning a new backend.
+    if attach_url:
+        env["HERMES_TUI_GATEWAY_URL"] = attach_url
     from hermes_cli.shared_session_attach import configure_tui_attachment
     try:
         configure_tui_attachment(env, resume_session_id)
