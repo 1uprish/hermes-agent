@@ -239,4 +239,10 @@ def submit_admission(rid, sid, session, params, text, transport):
         server._interrupt_busy_session(sid, session, session.get("agent"))
     # Recheck at the boundary: the busy turn may have settled while SQLite committed.
     server._drain_queued_prompt(rid, sid, session)
+    # The submit ACK reaches only its sender; every attached viewer needs the
+    # durable queue, even while the owner is blocked inside a model/tool call.
+    server._emit("session.info", sid, {
+        "stored_session_id": session.get("session_key") or sid,
+        **admission_snapshot(session),
+    })
     return server._ok(rid, receipt)

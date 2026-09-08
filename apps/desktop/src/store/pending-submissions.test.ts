@@ -1,11 +1,31 @@
 import { beforeEach, expect, it } from 'vitest'
 
+import { applyRuntimeInfo } from '@/app/session/hooks/use-session-actions/utils'
+import { isSteerableEntry } from '@/store/composer-queue'
+
 import { $queuedPromptsBySession, enqueueQueuedPrompt, getQueuedPrompts } from './composer-queue'
 import { reconcilePendingSubmissions, trackPendingSubmission } from './pending-submissions'
 
 beforeEach(() => {
   window.localStorage.clear()
   $queuedPromptsBySession.set({})
+})
+
+it('projects resumed runtime pending receipts under durable identity without making them sendable', () => {
+  const info = {
+    stored_session_id: 'durable',
+    pending_submissions: [
+      { admission_id: 'remote', status: 'queued', user: 'queued exact Ω' },
+      { admission_id: 'uncertain', status: 'unknown', user: 'unknown exact Ω' }
+    ]
+  }
+
+  applyRuntimeInfo(info)
+  applyRuntimeInfo(info)
+  expect(getQueuedPrompts('durable').map(({ id, text, serverStatus }) => ({ id, text, serverStatus })))
+    .toEqual(info.pending_submissions.map(({ admission_id, user, status }) => ({ id: admission_id, text: user, serverStatus: status })))
+  expect(getQueuedPrompts('durable').every(entry => !isSteerableEntry(entry))).toBe(true)
+  expect(getQueuedPrompts('runtime')).toEqual([])
 })
 
 it('reconciles server queue by identity without replaying or duplicating local entries', () => {
