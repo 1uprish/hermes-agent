@@ -5,6 +5,7 @@ import {
   fmtCwdBranch,
   fmtProjectCwdBranch,
   renderTitleTemplate,
+  resolveTerminalTitle,
   shortCwd,
   shortProject,
   shortSessionName,
@@ -204,6 +205,20 @@ describe('renderTitleTemplate', () => {
     expect(renderTitleTemplate('{marker} {session}', dflt)).toBe(composeTabTitle('✓', 'auth refactor', '', ''))
   })
 
+  it('preserves whitespace inside literal text (no global collapse)', () => {
+    expect(renderTitleTemplate('prefix  literal {marker}', tokens)).toBe('prefix  literal ✓')
+  })
+
+  it('keeps *_full values byte-verbatim, including runs of spaces', () => {
+    const spaced: TitleTokens = { ...tokens, cwdFull: '/tmp/a  b', sessionFull: 'alpha  beta' }
+    expect(renderTitleTemplate('{session_full}', spaced)).toBe('alpha  beta')
+    expect(renderTitleTemplate('{cwd_full}', spaced)).toBe('/tmp/a  b')
+  })
+
+  it('leaves a literal separator run alone when no token was empty', () => {
+    expect(renderTitleTemplate('A · · B {marker}', tokens)).toBe('A · · B ✓')
+  })
+
   it('collapses the separator orphaned by an empty token', () => {
     const noModel: TitleTokens = { ...tokens, model: '', session: 'auth refactor' }
     expect(renderTitleTemplate('{marker} {session} · {model} · {cwd}', noModel)).toBe('✓ auth refactor · ~/proj')
@@ -218,9 +233,51 @@ describe('renderTitleTemplate', () => {
     expect(renderTitleTemplate('{marker} {sesion}', tokens)).toBe('✓ {sesion}')
   })
 
+  it('drops only the space around an empty token, not the neighbours', () => {
+    const noMarker: TitleTokens = { ...tokens, marker: '', session: 'auth refactor' }
+    expect(renderTitleTemplate('{marker} {session}', noMarker)).toBe('auth refactor')
+  })
+
   it('passes literal text through unchanged', () => {
     expect(renderTitleTemplate('hermes: {session_full}', tokens)).toBe(
       'hermes: a very long session name that is not clipped'
     )
+  })
+})
+
+describe('resolveTerminalTitle', () => {
+  const tokens: TitleTokens = {
+    cwd: '~/proj',
+    cwdFull: '/Users/bb/proj',
+    marker: '✓',
+    model: 'opus-4',
+    modelFull: 'anthropic/opus-4',
+    session: 'auth refactor',
+    sessionFull: 'auth refactor'
+  }
+
+  const noModel: TitleTokens = { ...tokens, model: '', modelFull: '' }
+
+  it('falls back to the brand string when nothing is configured and no model is known', () => {
+    expect(resolveTerminalTitle({ tab: '', window: '' }, noModel, 'auth refactor')).toBe('Hermes')
+  })
+
+  it('honors a configured template BEFORE the model arrives', () => {
+    expect(resolveTerminalTitle({ tab: '{session_full}', window: '' }, noModel, 'auth refactor')).toEqual({
+      tab: 'auth refactor',
+      window: '✓ auth refactor · ~/proj'
+    })
+  })
+
+  it('honors a window-only template with no model', () => {
+    const out = resolveTerminalTitle({ tab: '', window: 'hermes: {session_full}' }, noModel, 'auth refactor')
+    expect(out).toEqual({ tab: '✓ auth refactor', window: 'hermes: auth refactor' })
+  })
+
+  it('reproduces the built-in split when no template is set', () => {
+    expect(resolveTerminalTitle({ tab: '', window: '' }, tokens, 'auth refactor')).toEqual({
+      tab: '✓ auth refactor',
+      window: '✓ auth refactor · opus-4 · ~/proj'
+    })
   })
 })

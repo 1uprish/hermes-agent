@@ -101,47 +101,108 @@ const TITLE_TOKEN_PATTERN = /\{(cwd|cwd_full|marker|model|model_full|session|ses
  *
  * Empty/blank template ⇒ `null`, meaning "caller keeps its built-in default".
  *
- * Segment separators are part of the template, so a token that resolves to an
- * empty string would leave a dangling ` · `. We therefore collapse runs of
- * separator/whitespace left by empty tokens, and trim them from both ends.
+ * Segment separators live in the template, so a token that resolves to an empty
+ * string would leave a dangling ` · `. Cleanup is driven by WHICH tokens came
+ * back empty rather than by scanning the finished string: a global
+ * whitespace/`·` collapse would also rewrite the user's literal text and the
+ * deliberately verbatim `*_full` values (a cwd or session name holding two
+ * spaces must survive intact). Each empty substitution is marked with a
+ * sentinel that cannot occur in user input, the separator on one side of it is
+ * dropped, then the sentinel is removed.
  */
 export const renderTitleTemplate = (template: string, tokens: TitleTokens): null | string => {
   if (!template.trim()) {
     return null
   }
 
-  const substituted = template.replace(TITLE_TOKEN_PATTERN, (_match, name: string) => {
-    switch (name) {
-      case 'cwd':
-        return tokens.cwd
+  const substituted = template.replace(TITLE_TOKEN_PATTERN, (match, name: string) => {
+    const value = titleTokenValue(name, tokens)
 
-      case 'cwd_full':
-        return tokens.cwdFull
-
-      case 'marker':
-        return tokens.marker
-
-      case 'model':
-        return tokens.model
-
-      case 'model_full':
-        return tokens.modelFull
-
-      case 'session':
-        return tokens.session
-
-      case 'session_full':
-        return tokens.sessionFull
-
-      default:
-        return ''
+    if (value === undefined) {
+      return match
     }
+
+    return value === '' ? EMPTY_TOKEN_SENTINEL : value
   })
 
-  // Collapse the separators orphaned by empty tokens (`a ·  · b` ⇒ `a · b`),
-  // then strip leading/trailing separators and whitespace.
-  return substituted
-    .replace(/\s*·(?:\s*·)+\s*/g, ' · ')
-    .replace(/^[\s·]+|[\s·]+$/g, '')
-    .replace(/\s{2,}/g, ' ')
+  if (!substituted.includes(EMPTY_TOKEN_SENTINEL)) {
+    return substituted.trim()
+  }
+
+  return (
+    substituted
+      // One alternation, not two passes: the match CONSUMES the hole, so a
+      // single hole can never have the separator eaten on both sides. The
+      // following separator is preferred; the leading one covers a trailing
+      // hole. `[^\S\n]` keeps the class to horizontal space only.
+      .replace(SENTINEL_ADJACENT_SEP, EMPTY_TOKEN_SENTINEL)
+      // A hole between plain spaces (`{marker} {session}` with no marker) must
+      // not leave a double space behind.
+      .replace(SENTINEL_BETWEEN_SPACES, ' ')
+      .replaceAll(EMPTY_TOKEN_SENTINEL, '')
+      .trim()
+  )
+}
+
+// A private-use code point: it cannot appear in a YAML scalar, a session title
+// or a path, and unlike U+0000 it is not a control char (no-control-regex).
+const EMPTY_TOKEN_SENTINEL = '\uE000'
+
+const SENTINEL_ADJACENT_SEP = /[^\S\n]*·\s*\uE000|\uE000\s*·[^\S\n]*/g
+const SENTINEL_BETWEEN_SPACES = /[^\S\n]\uE000[^\S\n]/g
+
+/** Token value, or `undefined` for a name the pattern does not cover. */
+const titleTokenValue = (name: string, tokens: TitleTokens): string | undefined => {
+  switch (name) {
+    case 'cwd':
+      return tokens.cwd
+
+    case 'cwd_full':
+      return tokens.cwdFull
+
+    case 'marker':
+      return tokens.marker
+
+    case 'model':
+      return tokens.model
+
+    case 'model_full':
+      return tokens.modelFull
+
+    case 'session':
+      return tokens.session
+
+    case 'session_full':
+      return tokens.sessionFull
+
+    default:
+      return undefined
+  }
+}
+
+/**
+ * Resolve what `useTerminalTitle` should receive: a `{tab, window}` pair, or the
+ * plain brand string when there is nothing session-specific to show yet.
+ *
+ * A CONFIGURED template wins even before the model is known — `{session_full}`
+ * or literal text renders fine with no model, and gating on the model would
+ * ignore the user's config for the whole startup window. The built-in
+ * composition still needs a model, else it degrades to a bare marker.
+ */
+export const resolveTerminalTitle = (
+  templates: { tab: string; window: string },
+  tokens: TitleTokens,
+  sessionName: string
+): string | { tab: string; window: string } => {
+  const tab = renderTitleTemplate(templates.tab, tokens)
+  const window = renderTitleTemplate(templates.window, tokens)
+
+  if (!tab && !window && !tokens.model) {
+    return 'Hermes'
+  }
+
+  return {
+    tab: tab || composeTabTitle(tokens.marker, sessionName, '', ''),
+    window: window || composeTabTitle(tokens.marker, sessionName, tokens.model, tokens.cwd)
+  }
 }

@@ -321,11 +321,19 @@ export const applyDisplay = (
     statusBar: normalizeStatusBar(d.tui_statusbar),
     statusBarFields: normalizeStatusBarFields(d.status_bar?.fields),
     streaming: d.streaming !== false,
-    tabTitleTemplate: normalizeTitleTemplate(d.tab_title_template),
+    // Fail safe, same rule as destructiveSlashConfirm above: a transient
+    // `config.get full` failure (cfg=null) must NOT reset a custom title
+    // template. The mtime poller advances mtimeRef before hydrating, so a
+    // clobber here would persist until the next config edit.
+    ...(cfg
+      ? {
+          tabTitleTemplate: normalizeTitleTemplate(d.tab_title_template),
+          windowTitleTemplate: normalizeTitleTemplate(d.window_title_template)
+        }
+      : {}),
     // The SAME key that stamps [HH:MM] on classic-CLI labels (#41531) —
     // no separate TUI knob.
-    timestamps: d.timestamps === true,
-    windowTitleTemplate: normalizeTitleTemplate(d.window_title_template)
+    timestamps: d.timestamps === true
   })
 }
 

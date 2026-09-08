@@ -17,9 +17,8 @@ import { RESIZE_COALESCE_MS } from '../config/timing.js'
 import { hasLeadGap, prevRenderedMsg } from '../domain/blockLayout.js'
 import { SECTION_NAMES, sectionMode } from '../domain/details.js'
 import {
-  composeTabTitle,
   fmtProjectCwdBranch,
-  renderTitleTemplate,
+  resolveTerminalTitle,
   shortCwd,
   shortSessionName,
   TITLE_MAX_CWD
@@ -663,15 +662,7 @@ export function useMainApp(gw: GatewayClient) {
   )
 
   useTerminalTitle(
-    model
-      ? {
-          tab:
-            renderTitleTemplate(ui.tabTitleTemplate, titleTokens) ?? composeTabTitle(marker, ui.sessionTitle, '', ''),
-          window:
-            renderTitleTemplate(ui.windowTitleTemplate, titleTokens) ??
-            composeTabTitle(marker, ui.sessionTitle, model, titleTokens.cwd)
-        }
-      : 'Hermes'
+    resolveTerminalTitle({ tab: ui.tabTitleTemplate, window: ui.windowTitleTemplate }, titleTokens, ui.sessionTitle)
   )
 
   useEffect(() => {

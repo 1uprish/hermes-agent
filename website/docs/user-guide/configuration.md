@@ -2142,7 +2142,7 @@ Notes:
 
 - An empty string (the default) keeps the built-in composition: `{marker} {session}` for the tab, `{marker} {session} · {model} · {cwd}` for the window.
 - Literal text passes through, so `"hermes: {session}"` works.
-- A token that resolves to nothing collapses its surrounding ` · ` separator, so a template does not leave dangling punctuation when there is no session title yet.
+- A token that resolves to nothing collapses its surrounding ` · ` separator, so a template does not leave dangling punctuation when there is no session title yet. Literal text and `*_full` values are otherwise passed through byte-for-byte, including runs of spaces.
 - Unknown tokens are left verbatim (`{sesion}` renders as `{sesion}`) so a typo is visible instead of silently blanking the title.
 - Display-only: no effect on prompt caching or request payloads. Edits apply live — the TUI re-reads the config without a restart.
 - Your terminal may still truncate the result. Terminal.app clips the active tab's title from the left; if the session name matters most, put it first and drop `{model}`/`{cwd}`.
