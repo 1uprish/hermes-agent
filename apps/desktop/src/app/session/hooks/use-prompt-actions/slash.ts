@@ -17,7 +17,7 @@ import {
 import { isMissingRpcMethod } from '@/lib/gateway-rpc'
 import { setSessionYolo } from '@/lib/yolo-session'
 import { openCommandPalettePage } from '@/store/command-palette'
-import { setComposerDraft } from '@/store/composer'
+import { $composerAttachments, setComposerDraft } from '@/store/composer'
 import { applyGoalStatusText } from '@/store/goals'
 import { dismissNotification, notify, notifyError } from '@/store/notifications'
 import { setPetScale } from '@/store/pet-gallery'
@@ -33,6 +33,7 @@ import {
   $connection,
   $sessions,
   $yoloActive,
+  resolveComposerSessionKey,
   setActiveSessionId,
   setCurrentUsage,
   setModelPickerOpen,
@@ -59,6 +60,7 @@ import type {
   SlashExecResponse
 } from '../../../types'
 
+import { preparedSubmissionKey, readPreparedSubmission } from './prepared-submissions'
 import { queueKickoffIfSessionBusy } from './queue-if-busy'
 import { resolveTargetSessionId } from './resolve-target-session'
 import { captureSubmissionDestination } from './submission-destination'
@@ -192,6 +194,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
       const initialRoutedId = getRoutedStoredSessionId()
 
       let submitted = true
+
       const initialStoredId =
         options?.storedSessionId ??
         (options?.sessionId
@@ -200,7 +203,29 @@ export function useSlashCommand(deps: SlashCommandDeps) {
 
       const destination =
         options?.destination ?? captureSubmissionDestination(initialStoredId ?? initialRuntimeId, ambientRequestGateway)
+
       const requestGateway = destination.requestGateway
+      const retryOptions = { ...options, retryText: rawCommand }
+
+      try {
+        const prepared = readPreparedSubmission(preparedSubmissionKey(
+          resolveComposerSessionKey(initialStoredId ?? initialRuntimeId, $sessions.get()),
+          destination, rawCommand, options?.attachments ?? $composerAttachments.get(), retryOptions
+        ))
+
+        if (prepared) {
+          return await submitPromptText(prepared.text, {
+            ...retryOptions, sessionId: initialRuntimeId ?? undefined,
+            storedSessionId: initialStoredId, displayText: prepared.displayText,
+            submission_id: prepared.id, destination
+          })
+        }
+      } catch (err) {
+        notifyError(err, copy.promptFailed)
+
+        return false
+      }
+
       const submissionId = options?.submission_id ?? crypto.randomUUID()
 
       // Resolve the session this command targets through the SHARED ladder that
@@ -249,7 +274,8 @@ export function useSlashCommand(deps: SlashCommandDeps) {
         // to updateSessionState re-keyed the tile's cache entry onto the
         // primary's stored session. Fall back to the selection only for a
         // session with no published state yet (a draft this call just created).
-        const storedSessionId = $sessionStates.get()[sessionId]?.storedSessionId ?? initialStoredId
+        const storedSessionId = $sessionStates.get()[sessionId]?.storedSessionId ?? initialStoredId ??
+          (!initialRuntimeId && activeSessionIdRef.current === sessionId ? selectedStoredSessionIdRef.current : null)
 
         // Header carries the command token only. The full invocation would
         // duplicate long args — `/goal <prose>` echoed the whole goal in the
@@ -395,7 +421,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           // screen. Every other target the dispatcher serves (tile, background
           // queue drain, a session created by this very call) had the same leak.
           submitted = await submitPromptText(message, {
-            ...options,
+            ...retryOptions,
             sessionId,
             storedSessionId,
             displayText,

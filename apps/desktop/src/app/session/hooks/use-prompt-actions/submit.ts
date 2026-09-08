@@ -1,4 +1,4 @@
-import { type MutableRefObject, useCallback, useRef } from 'react'
+import { type MutableRefObject, useCallback } from 'react'
 
 import { PROMPT_SUBMIT_REQUEST_TIMEOUT_MS } from '@/hermes'
 import type { Translations } from '@/i18n'
@@ -32,15 +32,21 @@ import {
   setMessages,
   touchSessionActivity
 } from '@/store/session'
-import { $sessionStates } from '@/store/session-states'
+import { $sessionStates, knownOwnerForSession } from '@/store/session-states'
 
 import type { ClientSessionState } from '../../../types'
 import { sessionContextDrift } from '../session-context-drift'
 import { resolveSessionProfile } from '../use-session-actions/utils'
 
+import {
+  preparedSubmissionKey,
+  readPreparedSubmission,
+  removePreparedSubmission,
+  writePreparedSubmission
+} from './prepared-submissions'
 import { finalizeInterruptedMessages } from './rewind'
 import { registerRecoveredRuntime, singleFlightSessionResume, takeRecoveredRuntime } from './single-flight-resume'
-import { captureSubmissionDestination, type SubmissionDestination } from './submission-destination'
+import { captureSubmissionDestination } from './submission-destination'
 import {
   acquireSubmitInFlight,
   type GatewayRequest,
@@ -119,19 +125,6 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
     updateSessionState,
     scope = MAIN_SUBMIT_SCOPE
   } = deps
-
-  const pending = useRef(
-    new Map<
-      string,
-      {
-        id: string
-        destination: SubmissionDestination
-        attachments: ComposerAttachment[]
-        text: string
-        params: Record<string, unknown>
-      }
-    >()
-  )
 
   return useCallback(
     async (rawText: string, options?: SubmitTextOptions) => {
@@ -313,18 +306,32 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
 
       const captured =
         options?.destination ?? captureSubmissionDestination(targetStoredSessionId ?? sessionId, ambientRequestGateway)
-      const retryKey = JSON.stringify([
-        targetStoredSessionId ?? sessionId,
-        captured.owner,
-        rawText,
-        attachments.map(a => a.occurrenceId ?? a.id),
-        options?.displayText,
-        options?.displayKind,
-        options?.fromQueue,
-        options?.submission_id
-      ])
-      const retained = pending.current.get(retryKey)
-      const destination = retained?.destination ?? captured
+
+      const retryKeyForTarget = () => preparedSubmissionKey(
+        resolveComposerSessionKey(targetStoredSessionId ?? sessionId, $sessions.get()),
+        captured, rawText, attachments, options
+      )
+
+      let retained: ReturnType<typeof readPreparedSubmission>
+
+      try {
+        retained = readPreparedSubmission(retryKeyForTarget())
+
+        // A legacy send has no deduplication identity. After an ambiguous ACK
+        // even an upgraded server cannot safely admit it under the saved ID.
+        if (retained?.legacyAttempted) {
+          return false
+        }
+      } catch (err) {
+        notifyError(err, copy.promptFailed)
+
+        return false
+      }
+
+      const destination = retained
+        ? captureSubmissionDestination(targetStoredSessionId ?? sessionId, ambientRequestGateway, retained)
+        : captured
+
       const requestGateway = destination.requestGateway
       const submissionId = retained?.id ?? options?.submission_id ?? crypto.randomUUID()
 
@@ -815,14 +822,24 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
           ...(options?.fromQueue && { queued: true })
         })
 
-        const prepared = retained ?? {
+        // A fresh draft had no session owner at entry. Adopt its published
+        // route only if it is the SAME captured connection/profile authority.
+        const publishedDestination = captureSubmissionDestination(targetStoredSessionId, ambientRequestGateway, {
+          owner: knownOwnerForSession(targetStoredSessionId)
+        })
+
+        const prepared: NonNullable<typeof retained> = retained ?? {
           id: submissionId,
-          destination,
+          owner: destination.owner ??
+            (publishedDestination.scopeKey === destination.scopeKey ? publishedDestination.owner : undefined),
+          displayText: options?.displayText,
           attachments: syncedAttachments,
           text,
           params: submitParams(liveSessionId)
         }
-        pending.current.set(retryKey, prepared)
+
+        const retryKey = retryKeyForTarget()
+        writePreparedSubmission(retryKey, prepared)
 
         // On sleep/wake the gateway's in-memory session may have been cleared
         // while the desktop app still holds the old session ID. The shared
@@ -830,6 +847,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         // other session-scoped RPC (attach, /compress, rewind, interrupt) goes
         // through the same helper so one policy covers the whole bug class.
         let submitErr: unknown = null
+        let legacyAccepted = false
 
         try {
           const recoverStoredSessionId = targetStoredSessionId
@@ -838,13 +856,33 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
             sessionId,
             recoverStoredSessionId,
             liveId =>
-              withSessionBusyRetry(() =>
-                requestGateway(
-                  'prompt.submit',
-                  { ...prepared.params, session_id: liveId },
-                  PROMPT_SUBMIT_REQUEST_TIMEOUT_MS
-                )
-              ),
+              withSessionBusyRetry(async () => {
+                const params: Record<string, unknown> = { ...prepared.params, session_id: liveId }
+
+                try {
+                  return await requestGateway<{ admission_id?: string; status?: string }>(
+                    'prompt.submit', params, PROMPT_SUBMIT_REQUEST_TIMEOUT_MS
+                  )
+                } catch (error) {
+                  // 4094 is an explicit PRE-admission capability refusal. Never
+                  // downgrade on a timeout, malformed ACK or an ambiguous retry.
+                  if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 4094 || prepared.legacyAttempted) {
+                    throw error
+                  }
+
+                  prepared.legacyAttempted = true
+                  writePreparedSubmission(retryKey, prepared)
+                  const { submission_id: _id, ...legacyParams } = params
+
+                  const result = await requestGateway<{ admission_id?: string; status?: string }>(
+                    'prompt.submit', legacyParams, PROMPT_SUBMIT_REQUEST_TIMEOUT_MS
+                  )
+
+                  legacyAccepted = true
+
+                  return result
+                }
+              }),
             {
               requestGateway,
               driftReason: sessionDriftReason,
@@ -874,7 +912,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
           )
 
           if (
-            (options?.submission_id !== undefined || result?.admission_id !== undefined) &&
+            !legacyAccepted &&
             (result?.admission_id !== submissionId || !['queued', 'started', 'terminal'].includes(result?.status ?? ''))
           ) {
             dropOptimistic(sessionId)
@@ -909,7 +947,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
           throw submitErr
         }
 
-        pending.current.delete(retryKey)
+        removePreparedSubmission(retryKey)
 
         if (usingComposerAttachments) {
           // A submit owns only the occurrences that actually reached the

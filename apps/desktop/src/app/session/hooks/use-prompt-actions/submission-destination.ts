@@ -8,6 +8,7 @@ import type { GatewayRequest } from './utils'
 const capturedRequests = new WeakMap<GatewayRequest, SubmissionDestination>()
 
 export interface SubmissionDestination {
+  readonly scopeKey: string
   readonly owner: SessionOwnerScope
   readonly requestGateway: GatewayRequest
 }
@@ -17,19 +18,23 @@ export interface SubmissionDestination {
  * connection/profile is unchanged; a write must never fall to a new socket. */
 export function captureSubmissionDestination(
   sessionId: string | null | undefined,
-  request: GatewayRequest
+  request: GatewayRequest,
+  restoredOwner?: { owner: SessionOwnerScope }
 ): SubmissionDestination {
   const captured = capturedRequests.get(request)
 
-  if (captured) {
+  if (captured && !restoredOwner) {
     return captured
   }
-  const knownOwner = knownOwnerForSession(sessionId)
+
+  const knownOwner = restoredOwner ? restoredOwner.owner : knownOwnerForSession(sessionId)
   const owner = knownOwner && typeof knownOwner === 'object' ? Object.freeze({ ...knownOwner }) : knownOwner
+
   // Window visibility, logs and registry discovery replace this descriptor.
   // Only transport/auth authority may invalidate an in-flight write.
   const authority = () => {
     const connection = $connection.get()
+
     return (
       connection &&
       JSON.stringify([
@@ -43,6 +48,7 @@ export function captureSubmissionDestination(
       ])
     )
   }
+
   const connectionAuthority = authority()
   const profile = $activeGatewayProfile.get()
 
@@ -54,7 +60,16 @@ export function captureSubmissionDestination(
     return timeoutMs === undefined ? request(method, params) : request(method, params, timeoutMs)
   }
 
+  const connection = $connection.get()
+
+  const scopeKey = JSON.stringify(
+    owner && typeof owner === 'object'
+      ? [owner.connectionId, owner.profile]
+      : [connection?.connectionId ?? connection?.baseUrl ?? null, profile]
+  )
+
   const destination = Object.freeze({
+    scopeKey,
     owner,
     requestGateway: <T>(method: string, params?: Record<string, unknown>, timeoutMs?: number) =>
       typeof owner === 'object' && owner !== null
