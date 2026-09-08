@@ -65,6 +65,36 @@ print(json.dumps({"snapshot":admission_snapshot(s),"queue":[s["queued_prompt"],*
     assert submit()["error"]["code"] == 4093
 
 
+@pytest.mark.parametrize("stop_after_claim", [False, True])
+def test_next_admission_resets_only_prior_stop(monkeypatch, tmp_path, stop_after_claim):
+    _interrupt_session_turn = server._interrupt_session_turn
+
+    session = owner(monkeypatch, tmp_path, running=False)
+    _interrupt_session_turn("ui", session)
+    stopped_generation = session["_queued_prompt_generation"]
+    calls = []
+    monkeypatch.setattr(server, "_restart_completed_failed_agent_build", lambda *a: True)
+
+    def ready(*args):
+        if stop_after_claim:
+            _interrupt_session_turn("ui", session)
+        return None
+
+    def run(*args, **kwargs):
+        calls.append((args[3], kwargs["queued_prompt_generation"]))
+        session["running"] = False
+
+    monkeypatch.setattr(server, "_wait_agent_for_prompt", ready)
+    monkeypatch.setattr(server, "_run_prompt_submit", run)
+    response = submit()
+    session["_run_thread"].join(5)
+    assert response["result"]["admission_id"] == "stable"
+    assert not session["_run_thread"].is_alive()
+    assert calls == ([] if stop_after_claim else [("later", stopped_generation)])
+    assert session["_turn_cancel_requested"] is stop_after_claim
+    assert session["_queued_prompt_generation"] == stopped_generation + int(stop_after_claim)
+
+
 def test_deferred_dispatch_failure_cannot_release_newer_owner(monkeypatch, tmp_path):
     from tui_gateway.prompt_admission import run_queued_admission, claim_admission
     from tui_gateway.prompt_execution import begin_execution
