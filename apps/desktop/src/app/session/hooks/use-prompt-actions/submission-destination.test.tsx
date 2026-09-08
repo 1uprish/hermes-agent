@@ -78,6 +78,48 @@ afterEach(() => {
 })
 
 describe('submission intent destinations', () => {
+  it('allows presentation and registry metadata replacement on the same authority', async () => {
+    const connection = {
+      baseUrl: 'http://localhost:1',
+      wsUrl: 'ws://localhost:1/ws',
+      token: 'secret',
+      connectionId: 'local',
+      mode: 'local',
+      profile: 'default'
+    }
+    $connection.set(connection as never)
+    const request = vi.fn(async () => ({ ok: true }))
+    const captured = captureSubmissionDestination(null, request as GatewayRequest)
+    $connection.set({ ...connection, registryScoped: true, isVisible: false } as never)
+    await expect(captured.requestGateway('prompt.submit', { text: 'hello' })).resolves.toEqual({ ok: true })
+    expect(request).toHaveBeenCalledOnce()
+  })
+
+  it('rejects actual endpoint, credential, connection and profile changes', async () => {
+    const connection = {
+      baseUrl: 'http://localhost:1',
+      wsUrl: 'ws://localhost:1/ws',
+      token: 'secret',
+      connectionId: 'local',
+      mode: 'local',
+      profile: 'default'
+    }
+    const request = vi.fn(async () => ({}))
+    for (const change of [
+      { baseUrl: 'http://other' },
+      { wsUrl: 'ws://other/ws' },
+      { token: 'other' },
+      { connectionId: 'other' },
+      { profile: 'other' },
+      { mode: 'remote' }
+    ]) {
+      $connection.set(connection as never)
+      const captured = captureSubmissionDestination(null, request as GatewayRequest)
+      $connection.set({ ...connection, ...change } as never)
+      await expect(captured.requestGateway('prompt.submit')).rejects.toThrow('Submission destination changed')
+    }
+    expect(request).not.toHaveBeenCalled()
+  })
   it('reuses a prepared direct submission after ambiguous failure without restaging attachments', async () => {
     const { deps, requestGateway } = setup()
     requestGateway.mockRejectedValueOnce(new Error('connection closed'))
