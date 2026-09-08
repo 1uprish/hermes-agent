@@ -734,7 +734,7 @@ export function usePromptActions({
   // completed work intact. During a tool it waits for the safe result boundary.
   // Returns false when the turn raced to completion so the composer can queue.
   const redirectPrompt = useCallback(
-    async (rawText: string): Promise<boolean> => {
+    async (rawText: string, mode: 'interrupt' | 'steer' = 'interrupt'): Promise<boolean> => {
       const text = sanitizeComposerInput(rawText).trim()
       // Ref, not the closure-captured prop — see cancelRun above. A redirect
       // reaches the live model mid-turn, so a stale target delivers the user's
@@ -756,7 +756,9 @@ export function usePromptActions({
         // gateway, in arrival order: sealed already-streamed output above,
         // correction bubble below it, post-redirect deltas below that
         // (#73793, #83151).
-        const messageId = appendSessionTextMessage(id, 'user', text, undefined, { appendAfterActiveReply: true })
+        const messageId = appendSessionTextMessage(id, 'user', text, undefined, {
+          appendAfterActiveReply: mode === 'interrupt'
+        })
 
         const discardOptimisticMessage = () =>
           updateSessionState(id, state => ({
@@ -774,7 +776,10 @@ export function usePromptActions({
           })
 
         try {
-          const result = await requestGateway<SessionRedirectResponse>('session.redirect', { session_id: id, text })
+          const result = await requestGateway<SessionRedirectResponse>(
+            mode === 'steer' ? 'session.steer' : 'session.redirect',
+            { session_id: id, text }
+          )
 
           if (result?.status === 'redirected') {
             triggerHaptic('submit')
@@ -785,7 +790,9 @@ export function usePromptActions({
           if (result?.status === 'queued') {
             // Build-window redirects become the next turn, not part of the
             // active reply, so retain the optimistic row at the tail.
-            moveOptimisticMessageToEnd()
+            if (mode === 'interrupt') {
+              moveOptimisticMessageToEnd()
+            }
             triggerHaptic('submit')
 
             return true

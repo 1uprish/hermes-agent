@@ -346,6 +346,7 @@ export interface HermesConfig {
     personality?: string
     skin?: string
     interim_assistant_messages?: boolean
+    busy_input_mode?: string
     timestamps?: boolean
   }
   desktop?: {
