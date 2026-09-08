@@ -18,8 +18,12 @@ export interface PreparedSubmission {
 
 // A journal, not an automatic outbox. Only an explicit retry may reuse an
 // uncertain admission. Read storage each time so a remount cannot lose it.
-function readJournal(): Record<string, PreparedSubmission> {
-  const parsed: unknown = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '{}')
+async function readJournal(): Promise<Record<string, PreparedSubmission>> {
+  const native = window.hermesDesktop?.preparedSubmissions
+
+  const parsed: unknown = JSON.parse(native
+    ? await native.read()
+    : window.localStorage.getItem(STORAGE_KEY) || '{}')
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('Invalid prepared submission journal')
@@ -48,19 +52,36 @@ export function preparedSubmissionKey(
   ])
 }
 
-export function readPreparedSubmission(key: string): PreparedSubmission | undefined {
-  return readJournal()[key]
+export async function readPreparedSubmission(key: string): Promise<PreparedSubmission | undefined> {
+  return (await readJournal())[key]
 }
 
-export function writePreparedSubmission(key: string, entry: PreparedSubmission): void {
-  const journal = readJournal()
+export async function writePreparedSubmission(key: string, entry: PreparedSubmission): Promise<void> {
+  const native = window.hermesDesktop?.preparedSubmissions
+
+  if (native) {
+    await native.update(key, JSON.stringify(entry))
+
+    return
+  }
+
+  const journal: Record<string, PreparedSubmission> = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '{}')
   journal[key] = entry
-  // Fail before sending if persistence fails; never claim a volatile ID is durable.
+  // Browser-only clients retain reload recovery, not a process-crash guarantee.
+  // Native write failures never fall back here: sending requires their ACK.
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(journal))
 }
 
-export function removePreparedSubmission(key: string): void {
-  const journal = readJournal()
+export async function removePreparedSubmission(key: string): Promise<void> {
+  const native = window.hermesDesktop?.preparedSubmissions
+
+  if (native) {
+    await native.update(key, null)
+
+    return
+  }
+
+  const journal: Record<string, PreparedSubmission> = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || '{}')
   delete journal[key]
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(journal))
 }

@@ -354,6 +354,7 @@ import {
   type SecretStoragePolicy,
   writeSecretStoragePolicy
 } from './secret-storage-policy'
+import { registerPreparedSubmissions } from './prepared-submissions'
 import {
   buildInstanceWindowUrl,
   buildSessionWindowUrl,
@@ -15121,6 +15122,8 @@ ipcMain.on('hermes:wake-indicator:set', (_event, state) => {
 // --- Text size (zoom) -------------------------------------------------------
 // The settings UI drives the same clamped zoom scale as the Ctrl/Cmd
 // shortcuts and the View menu. Reads and writes target the asking window.
+registerPreparedSubmissions()
+
 ipcMain.handle('hermes:zoom:get', event => {
   const window = BrowserWindow.fromWebContents(event.sender)
 
