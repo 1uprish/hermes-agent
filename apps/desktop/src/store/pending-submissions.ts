@@ -25,7 +25,7 @@ export function reconcilePendingSubmissions(key: string, value: unknown): void {
   for (const raw of value) {
     if (!raw || typeof raw.admission_id !== 'string' || !['queued', 'started', 'unknown'].includes(raw.status)) { continue }
     const id = raw.admission_id
-    receipts.set(id, { ...known[id], id, text: typeof raw.text === 'string' ? raw.text : known[id]?.text ?? '', status: raw.status })
+    receipts.set(id, { ...known[id], id, text: typeof raw.user === 'string' ? raw.user : known[id]?.text ?? '', status: raw.status })
   }
 
   const current = getQueuedPrompts(key)
@@ -52,7 +52,7 @@ export function reconcilePendingSubmissions(key: string, value: unknown): void {
   }
 
   for (const raw of value) {
-    if (typeof raw?.admission_id === 'string') { known[raw.admission_id] = { ...known[raw.admission_id], id: raw.admission_id, text: raw.text ?? known[raw.admission_id]?.text ?? '', status: raw.status } }
+    if (typeof raw?.admission_id === 'string') { known[raw.admission_id] = { ...known[raw.admission_id], id: raw.admission_id, text: raw.user ?? known[raw.admission_id]?.text ?? '', status: raw.status } }
   }
 
   journal[key] = known
