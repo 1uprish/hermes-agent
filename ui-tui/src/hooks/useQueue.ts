@@ -277,7 +277,8 @@ export function useQueue() {
       const item = queue.items.find(
         item =>
           item.submissionId === receipt.admission_id &&
-          item.destination?.sid === receipt.target_session_id &&
+          Boolean(item.destination?.storedSid) &&
+          item.destination?.storedSid === receipt.target_session_id &&
           item.destination?.profileHome === receipt.target_profile_home
       )
 

@@ -210,7 +210,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
         return null
       }
 
-      const info = r.info ?? null
+      const info = r.info ? { ...r.info, stored_session_id: r.stored_session_id || r.info.stored_session_id } : null
       const requestedTitle = title?.trim() ?? ''
 
       resetSession()
@@ -301,8 +301,9 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
             return patchUiState({ status: 'ready' })
           }
 
-          const info = r.info ?? null
+          const info = r.info ? { ...r.info, stored_session_id: r.stored_session_id || r.info.stored_session_id } : null
           const running = Boolean(r.running || r.status === 'working' || r.status === 'waiting')
+          if (info) info.stored_session_id = r.session_key || info.stored_session_id
 
           resetSession()
           setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
@@ -330,7 +331,9 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
 
   const resumeById = useCallback(
     (id: string) => {
-      const destination = { ...captureDestination(), sid: id }
+      const current = captureDestination()
+      const destination = current.sid === id || current.storedSid === id
+        ? current : { ...current, sid: id, storedSid: id }
       patchOverlayState({ sessions: false })
       patchUiState({ status: 'resuming…' })
 
@@ -354,12 +357,13 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
               return patchUiState({ status: 'ready' })
             }
 
-            const info = r.info ?? null
+            const info = r.info ? { ...r.info, stored_session_id: r.stored_session_id || r.info.stored_session_id } : null
             const running = Boolean(r.running || r.status === 'working' || r.status === 'waiting')
+            if (info) info.stored_session_id = r.session_key || info.stored_session_id || r.resumed
 
             // A successful resume authorizes the requested source → canonical
             // successor mapping; ordinary focus changes never migrate input.
-            migratePendingInputs(destination, r.session_id)
+            migratePendingInputs(destination, r.session_id, info?.stored_session_id)
             resetSession()
             setSessionStartedAt(r.started_at ? r.started_at * 1000 : Date.now())
 

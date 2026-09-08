@@ -188,6 +188,7 @@ export interface ProjectInfo {
 }
 
 export interface SessionInfo {
+  stored_session_id?: string
   cwd?: string
   fast?: boolean
   install_warning?: string

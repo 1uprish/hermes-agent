@@ -67,6 +67,18 @@ describe('createGatewayEventHandler', () => {
     patchUiState({ showReasoning: true })
   })
 
+  it('displays generic errors without settling versioned execution', () => {
+    const ctx = buildCtx([])
+    const onEvent = createGatewayEventHandler(ctx)
+    patchUiState({ sid: 'owner', busy: true, status: 'running…', info: { model: 'test', tools: {}, skills: {}, execution_epoch: 'owner-epoch', execution_generation: 2 } })
+    onEvent({ type: 'error', session_id: 'owner', payload: { message: 'build failed' } } as any)
+    expect(ctx.system.sys).toHaveBeenCalledWith('error: build failed')
+    expect(getUiState()).toMatchObject({ busy: true, status: 'running…' })
+    onEvent({ type: 'error', session_id: 'owner', payload: { message: 'turn failed', execution_epoch: 'owner-epoch', execution_generation: 2 } } as any)
+    expect(ctx.system.sys).toHaveBeenCalledWith('error: turn failed')
+    expect(getUiState().busy).toBe(false)
+  })
+
   it('fences restarted owner lifecycle events until resume establishes the new epoch', () => {
     const appended: Msg[] = []
     const onEvent = createGatewayEventHandler(buildCtx(appended))

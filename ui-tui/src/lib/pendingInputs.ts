@@ -46,12 +46,12 @@ export function pendingInputOwner(destination: SubmissionDestination): Submissio
 }
 
 // Resume authorizes the source → successor mapping; navigation alone does not.
-export function migratePendingInputs(previous: SubmissionDestination, successorSid: string): void {
-  if (!previous.sid || !successorSid || previous.sid === successorSid) {
+export function migratePendingInputs(previous: SubmissionDestination, successorSid: string, successorStoredSid?: string): void {
+  if (!previous.sid || !successorSid || (previous.sid === successorSid && previous.storedSid === successorStoredSid)) {
     return
   }
 
-  const successor = Object.freeze({ ...previous, sid: successorSid })
+  const successor = Object.freeze({ ...previous, sid: successorSid, storedSid: successorStoredSid ?? null })
 
   for (const item of loadPendingInputs(previous)) {
     item.ownerDestination = successor
