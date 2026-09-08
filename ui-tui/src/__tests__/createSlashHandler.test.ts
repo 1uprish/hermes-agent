@@ -33,6 +33,18 @@ describe('createSlashHandler', () => {
     envState.dashboardTuiMode = false
   })
 
+  it('does not execute a stale fallback command after switching destinations', async () => {
+    patchUiState({ sid: 'owner' })
+    const ctx = buildCtx()
+    let reject!: (error: unknown) => void
+    ctx.gateway.gw.request.mockReturnValueOnce(new Promise((_, fail) => { reject = fail }))
+    createSlashHandler(ctx)('/unknown-command')
+    patchUiState({ sid: 'other' })
+    reject(new Error('worker failed'))
+    await new Promise(resolve => setImmediate(resolve))
+    expect(ctx.gateway.gw.request).toHaveBeenCalledTimes(1)
+  })
+
   it('opens the unified sessions overlay for /resume', () => {
     const ctx = buildCtx()
 

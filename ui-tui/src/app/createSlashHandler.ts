@@ -170,6 +170,7 @@ export function createSlashHandler(ctx: SlashHandlerContext): (cmd: string) => b
         long ? page(text, parsed.name[0]!.toUpperCase() + parsed.name.slice(1)) : sys(text)
       })
       .catch(() => {
+        if (stale()) {return}
         gw.request('command.dispatch', { arg: parsed.arg, name: parsed.name, session_id: sid })
           .then((raw: unknown) => {
             if (stale()) {

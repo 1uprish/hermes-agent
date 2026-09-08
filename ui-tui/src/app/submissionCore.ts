@@ -119,7 +119,42 @@ export function submitPrompt(
           patchUiState({ busy: false, status: 'ready' })
         }
       })
-      .catch((e: Error) => {
+      .catch(async (e: Error & { code?: number }) => {
+        // 4094 is a pre-admission refusal, not an ambiguous write. Special
+        // compute modes still support legacy submit; retry only this refusal,
+        // keeping the prepared payload, destination and queue mode unchanged.
+        if (item && e.code === 4094) {
+          if (focused()) {deps.sys('durable admission unavailable for this session — using legacy delivery')}
+
+          try {
+            const r = await deps.gw.request<PromptSubmitResponse>('prompt.submit', {
+              session_id: sid,
+              text: item.preparedText ?? submitText,
+              queued: item.queued !== false
+            })
+
+            const accepted = Boolean(r?.voice_stopped || ['streaming', 'queued', 'steered', 'redirected'].includes(r?.status ?? ''))
+            item.settle?.(accepted)
+
+            if (focused()) {
+              if (r?.voice_stopped) {patchUiState({ busy: false, status: 'ready' })}
+              else if (!accepted) {
+                deps.sys('legacy delivery unconfirmed — input retained; retry may duplicate execution')
+                patchUiState({ status: 'delivery unconfirmed' })
+              }
+            }
+          } catch (error) {
+            item.settle?.(false)
+
+            if (focused()) {
+              deps.sys(`legacy delivery unconfirmed: ${error instanceof Error ? error.message : String(error)} — input retained; retry may duplicate execution`)
+              patchUiState({ status: 'delivery unconfirmed' })
+            }
+          }
+
+          return
+        }
+
         if (item) {
           item.settle?.(false)
 
@@ -141,6 +176,7 @@ export function submitPrompt(
           if (!focused()) {
             return
           }
+
           patchUiState({ busy: true, status: 'queued for next turn' })
 
           return deps.sys(`queued: "${submitText.slice(0, 50)}${submitText.length > 50 ? '…' : ''}"`)
@@ -149,6 +185,7 @@ export function submitPrompt(
         if (!focused()) {
           return
         }
+
         deps.sys(`error: ${e.message}`)
         patchUiState({ busy: false, status: 'ready' })
       })

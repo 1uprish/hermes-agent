@@ -209,7 +209,8 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
    */
   const pasteClipboardImage = useCallback(
     async (value: string, cursor: number, quiet: boolean): Promise<ComposerPasteResult | null> => {
-      const sid = getUiState().sid
+      const destination = captureDestination()
+      const { sid } = destination
 
       if (!sid) {
         return null
@@ -218,6 +219,8 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
       const r = await gw
         .request<ClipboardPasteResponse & { path?: string }>('clipboard.paste', { session_id: sid })
         .catch(() => null)
+
+      if (!isCurrentDestination(destination)) {return null}
 
       if (r?.attached) {
         return attachImageToken(r, value, cursor)
@@ -234,6 +237,7 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
 
   const handleResolvedPaste = useCallback(
     async ({ bracketed, cursor, text, value }: Omit<PasteEvent, 'hotkey'>): Promise<ComposerPasteResult | null> => {
+      const destination = captureDestination()
       const cleanedText = stripTrailingPasteNewlines(text)
 
       if (!cleanedText || !/[^\n]/.test(cleanedText)) {
@@ -249,6 +253,8 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
             session_id: sid
           })
 
+          if (!isCurrentDestination(destination)) {return null}
+
           if (attached?.name) {
             // Drop an `[[ Image N ]]` token where the path was typed. The old
             // path printed a notice above the status bar and left the composer
@@ -260,11 +266,15 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
           // Fall back to generic file-drop detection below.
         }
 
+        if (!isCurrentDestination(destination)) {return null}
+
         try {
           const dropped = await gw.request<InputDetectDropResponse>('input.detect_drop', {
             session_id: sid,
             text: cleanedText
           })
+
+          if (!isCurrentDestination(destination)) {return null}
 
           if (dropped?.matched && dropped.text) {
             return insertAtCursor(value, cursor, dropped.text)
@@ -273,6 +283,8 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
           // Fall through to normal text paste behavior.
         }
       }
+
+      if (!isCurrentDestination(destination)) {return null}
 
       const lineCount = cleanedText.split('\n').length
       const pasteCollapseLines = getUiState().pasteCollapseLines
@@ -297,7 +309,7 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
         .then(r => {
           const path = r?.path
 
-          if (!path) {
+          if (!path || !isCurrentDestination(destination)) {
             return
           }
 
@@ -312,6 +324,9 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
 
   const handleTextPaste = useCallback(
     ({ bracketed, cursor, hotkey, text, value }: PasteEvent): MaybePromise<ComposerPasteResult | null> => {
+      // Clipboard reads can outlive a focus change, before any gateway RPC starts.
+      const destination = captureDestination()
+
       if (hotkey) {
         const preferOsc52 = isRemoteShellSession(process.env)
 
@@ -332,6 +347,8 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
             })
 
         return readPreferredText.then(async preferredText => {
+          if (!isCurrentDestination(destination)) {return null}
+
           if (isUsableClipboardText(preferredText)) {
             return handleResolvedPaste({ bracketed: false, cursor, text: preferredText, value })
           }
@@ -352,10 +369,11 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
    */
   const appendAttachment = useCallback(
     (attach: (value: string, cursor: number) => Promise<ComposerPasteResult | null>) => {
+      const destination = captureDestination()
       const current = inputRef.current
 
       void attach(current, current.length).then(next => {
-        if (next) {
+        if (next && isCurrentDestination(destination)) {
           setInput(next.value)
         }
       })
@@ -371,7 +389,8 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
   const attachImagePath = useCallback(
     (path: string) =>
       appendAttachment(async (value, cursor) => {
-        const sid = getUiState().sid
+        const destination = captureDestination()
+        const { sid } = destination
 
         if (!sid || !path.trim()) {
           return null
@@ -380,12 +399,12 @@ export function useComposerState({ gw, submitRef, sys }: UseComposerStateOptions
         const attached = await gw
           .request<ImageAttachResponse & { path?: string }>('image.attach', { path, session_id: sid })
           .catch((e: Error) => {
-            sys(`error: ${e.message}`)
+            if (isCurrentDestination(destination)) {sys(`error: ${e.message}`)}
 
             return null
           })
 
-        return attached?.name ? attachImageToken(attached, value, cursor) : null
+        return isCurrentDestination(destination) && attached?.name ? attachImageToken(attached, value, cursor) : null
       }),
     [appendAttachment, attachImageToken, gw, sys]
   )
