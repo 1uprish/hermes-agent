@@ -247,7 +247,7 @@ export const sessionCommands: SlashCommand[] = [
         .then(
           ctx.guarded<SessionCompressResponse>(r => {
             const current = getUiState()
-            const authorityKeys = ['execution_epoch', 'execution_generation', 'execution_state', 'running'] as const
+            const authorityKeys = ['stored_session_id', 'execution_epoch', 'execution_generation', 'execution_state', 'running'] as const
 
             // Compression is not attachment: a delayed reply cannot replace a
             // newer turn/owner, nor replace its transcript with an old snapshot.

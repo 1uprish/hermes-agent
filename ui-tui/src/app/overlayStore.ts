@@ -1,8 +1,8 @@
 import { atom, computed } from 'nanostores'
 
 import type { OverlayState } from './interfaces.js'
-import { $uiState } from './uiStore.js'
 import { captureDestination, isCurrentDestination } from './submissionDestination.js'
+import { $uiState } from './uiStore.js'
 
 export function capturePromptResponseGuard<K extends 'approval' | 'clarify' | 'sudo' | 'secret'>(
   key: K,

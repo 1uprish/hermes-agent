@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { startPromptLiveSession } from '../app/useMainApp.js'
 import { patchUiState } from '../app/uiStore.js'
+import { startPromptLiveSession } from '../app/useMainApp.js'
 
 describe('startPromptLiveSession', () => {
   it('keeps the created target through a delayed model switch without publishing into the new focus', async () => {
@@ -9,6 +9,7 @@ describe('startPromptLiveSession', () => {
     let finish!: (value: { value: string }) => void
     const dispatched: unknown[] = []
     const notices: string[] = []
+
     const pending = startPromptLiveSession({
       dispatchSubmission: (text, destination) => dispatched.push({ text, destination }),
       maybeWarn: () => notices.push('warn'),
@@ -19,6 +20,7 @@ describe('startPromptLiveSession', () => {
       rpc: () => new Promise(resolve => { finish = resolve }),
       sys: text => notices.push(text)
     })
+
     await Promise.resolve()
     patchUiState({ sid: 'other' })
     finish({ value: 'chosen' })
@@ -38,6 +40,7 @@ describe('startPromptLiveSession', () => {
         calls.push(['new', { message, title }])
 
         patchUiState({ sid: 'abc123' })
+
         return 'abc123'
       },
       onModelSwitched: (value, result) => calls.push(['model-switched', { result, value }]),
@@ -77,6 +80,7 @@ describe('startPromptLiveSession', () => {
         calls.push('new')
 
         patchUiState({ sid: 'abc123' })
+
         return 'abc123'
       },
       prompt: '   ',
