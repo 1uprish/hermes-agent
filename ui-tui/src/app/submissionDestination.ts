@@ -1,5 +1,6 @@
+import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 
 import { getUiState } from './uiStore.js'
 
@@ -9,13 +10,28 @@ export interface SubmissionDestination {
   readonly profileHome: string
 }
 
+// Resolve existing ancestors too: a new profile may not have been created yet.
+function canonicalHome(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error
+    }
+
+    const parent = dirname(path)
+
+    return parent === path ? path : join(canonicalHome(parent), basename(path))
+  }
+}
+
 export function captureDestination(): SubmissionDestination {
   const { sid, info } = getUiState()
 
   return Object.freeze({
     sid,
     profile: info?.profile_name || 'default',
-    profileHome: resolve(process.env.HERMES_HOME ?? join(homedir(), '.hermes'))
+    profileHome: canonicalHome(resolve(process.env.HERMES_HOME ?? join(homedir(), '.hermes')))
   })
 }
 

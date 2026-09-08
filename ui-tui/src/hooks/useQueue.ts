@@ -5,7 +5,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { captureDestination, type SubmissionDestination } from '../app/submissionDestination.js'
 import { $uiState, getUiState } from '../app/uiStore.js'
-import { loadPendingInputs, removePendingInput, savePendingInput } from '../lib/pendingInputs.js'
+import {
+  loadPendingInputs,
+  pendingDestinationKey,
+  pendingInputOwner,
+  pendingInputRevision,
+  removePendingInput,
+  savePendingInput
+} from '../lib/pendingInputs.js'
 
 export interface QueueItem {
   display: string
@@ -14,6 +21,7 @@ export interface QueueItem {
   createdAt?: number
   submissionId?: string
   destination?: SubmissionDestination
+  ownerDestination?: SubmissionDestination
   inFlight?: boolean
   failed?: boolean
   preparedText?: string
@@ -55,6 +63,8 @@ export function removeAtInPlace<T>(arr: T[], i: number): T[] {
 }
 
 interface PendingQueue {
+  revision?: number
+  destination?: SubmissionDestination
   edit: number | null
   items: QueueItem[]
 }
@@ -66,18 +76,58 @@ export function useQueue() {
   const [, refresh] = useState(0)
 
   const getQueue = useCallback((destination = captureDestination()) => {
-    const { sid, profile } = destination
+    // Apply compression before resolving a queue, including through stale callbacks.
+    for (const [oldKey, source] of queues.current) {
+      const owner = pendingInputOwner(source.destination!)
+      const newKey = pendingDestinationKey(owner)
+
+      if (newKey === oldKey) {
+        continue
+      }
+
+      const target = queues.current.get(newKey) ?? { destination: owner, edit: null, items: [] }
+      const edited = source.edit === null ? undefined : source.items[source.edit]
+
+      for (const item of source.items) {
+        item.ownerDestination = owner
+
+        if (!item.inFlight && !item.failed) {
+          item.destination = owner
+        }
+      }
+
+      const retained = new Map([...target.items, ...source.items].map(item => [item.submissionId, item]))
+      target.items = loadPendingInputs(owner).map(item => retained.get(item.submissionId) ?? item)
+
+      if (edited) {
+        target.edit = target.items.indexOf(edited)
+      }
+
+      queues.current.delete(oldKey)
+      queues.current.set(newKey, target)
+    }
+
+    destination = pendingInputOwner(destination)
+    const { sid } = destination
 
     if (!sid) {
       return unbound.current
     }
 
-    const key = JSON.stringify([profile, sid])
+    const key = pendingDestinationKey(destination)
     let queue = queues.current.get(key)
 
     if (!queue) {
-      queue = { edit: null, items: loadPendingInputs(destination) }
+      queue = { destination, edit: null, items: loadPendingInputs(destination) }
       queues.current.set(key, queue)
+    }
+
+    if (queue.revision !== pendingInputRevision) {
+      const retained = new Map(queue.items.map(item => [item.submissionId, item]))
+      const edited = queue.edit === null ? undefined : queue.items[queue.edit]
+      queue.items = loadPendingInputs(destination).map(item => retained.get(item.submissionId) ?? item)
+      queue.edit = edited ? queue.items.indexOf(edited) : null
+      queue.revision = pendingInputRevision
     }
 
     // Input typed before any session exists belongs to the next attachment,
@@ -142,7 +192,7 @@ export function useQueue() {
 
   const enqueue = useCallback(
     (text: string, display = text, destination?: SubmissionDestination) => {
-      const owner = destination ?? captureDestination()
+      const owner = pendingInputOwner(destination ?? captureDestination())
       const queue = getQueue(owner)
 
       const item = {
@@ -172,6 +222,7 @@ export function useQueue() {
       if (!queue.items.includes(item)) {
         prependQueueItem(queue.items, item)
       }
+
       syncQueue()
     },
     [getQueue, syncQueue]
@@ -190,12 +241,20 @@ export function useQueue() {
         if (confirmed) {
           return
         }
+
+        // Resolve migrations while the attempted state still protects the receipt target.
+        getQueue()
         confirmed = accepted
         item.inFlight = false
         item.failed = !accepted
 
         if (accepted) {
           removePendingInput(item)
+
+          for (const pending of queues.current.values()) {
+            removeAtInPlace(pending.items, pending.items.indexOf(item))
+          }
+
           removeAtInPlace(queue.items, queue.items.indexOf(item))
         } else {
           savePendingInput(item)
@@ -208,7 +267,7 @@ export function useQueue() {
 
       return item
     },
-    [syncQueue]
+    [getQueue, syncQueue]
   )
 
   useEffect(() => {
@@ -267,6 +326,7 @@ export function useQueue() {
       if (queue.items[i]?.inFlight) {
         return undefined
       }
+
       const previous = queue.items[i]
       const item = takeQueueItem(queue.items, i, editedDisplay)
 
@@ -277,6 +337,7 @@ export function useQueue() {
       if (previous && previous.submissionId !== item.submissionId) {
         removePendingInput(previous)
       }
+
       queue.items.splice(i, 0, item)
 
       return claim(queue, item)
@@ -289,11 +350,13 @@ export function useQueue() {
       if (queueRef.current[i]?.inFlight) {
         return
       }
+
       const item = queueRef.current[i]
 
       if (item) {
         removePendingInput(item)
       }
+
       removeAtInPlace(queueRef.current, i)
       syncQueue()
     },

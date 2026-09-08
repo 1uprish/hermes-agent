@@ -20,11 +20,58 @@ const directory = (home?: string) =>
   join(home ?? process.env.HERMES_HOME ?? join(homedir(), '.hermes'), 'tui-pending-inputs')
 
 const recordName = /^[0-9a-f-]{36}\.json$/
+const successors = new Map<string, SubmissionDestination>()
+export let pendingInputRevision = 0
+
+export const pendingDestinationKey = (destination: SubmissionDestination) =>
+  JSON.stringify([destination.profileHome, destination.profile, destination.sid])
+
+export function pendingInputOwner(destination: SubmissionDestination): SubmissionDestination {
+  let current = destination
+  const seen = new Set<string>()
+
+  while (!seen.has(pendingDestinationKey(current))) {
+    const key = pendingDestinationKey(current)
+    seen.add(key)
+    const next = successors.get(key)
+
+    if (!next) {
+      break
+    }
+
+    current = next
+  }
+
+  return current
+}
+
+// Only the authorized compression event calls this, never ordinary navigation.
+export function migratePendingInputs(previous: SubmissionDestination, successorSid: string): void {
+  if (!previous.sid || !successorSid || previous.sid === successorSid) {
+    return
+  }
+
+  const successor = Object.freeze({ ...previous, sid: successorSid })
+
+  for (const item of loadPendingInputs(previous)) {
+    item.ownerDestination = successor
+
+    if (!item.failed) {
+      item.destination = successor
+    }
+
+    savePendingInput(item)
+  }
+
+  successors.set(pendingDestinationKey(previous), successor)
+  pendingInputRevision++
+}
 
 function syncDirectory(dir: string) {
   if (process.platform === 'win32') {
     return
   }
+
   const fd = openSync(dir, 'r')
 
   try {
@@ -39,16 +86,20 @@ export function savePendingInput(item: QueueItem): void {
   if (!item.submissionId || !item.destination?.sid) {
     return
   }
+
   const dir = directory(item.destination?.profileHome)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   const path = join(dir, `${item.submissionId}.json`)
   const temporary = `${path}.${process.pid}.tmp`
-  const { submissionId, destination, display, text, preparedText, inFlight, failed, createdAt, queued } = item
+  const ownerDestination = pendingInputOwner(item.ownerDestination ?? item.destination)
+  const { submissionId, display, text, preparedText, inFlight, failed, createdAt, queued } = item
+  const destination = inFlight || failed ? item.destination : ownerDestination
   writeFileSync(
     temporary,
     JSON.stringify({
       submissionId,
       destination,
+      ownerDestination,
       display,
       text,
       preparedText,
@@ -66,11 +117,13 @@ export function removePendingInput(item: QueueItem): void {
   if (!item.submissionId) {
     return
   }
+
   const dir = directory(item.destination?.profileHome)
 
   if (!existsSync(dir)) {
     return
   }
+
   rmSync(join(dir, `${item.submissionId}.json`), { force: true })
   syncDirectory(dir)
 }
@@ -94,6 +147,7 @@ export function loadPendingInputs(destination: SubmissionDestination): QueueItem
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
           return []
         }
+
         throw error
       }
 
@@ -107,7 +161,9 @@ export function loadPendingInputs(destination: SubmissionDestination): QueueItem
         throw new Error(`Invalid pending input record: ${name}`)
       }
 
-      if (record.destination?.sid !== destination.sid || record.destination?.profile !== destination.profile) {
+      const owner = record.ownerDestination ?? record.destination
+
+      if (owner?.sid !== destination.sid || owner?.profile !== destination.profile) {
         return []
       }
 
