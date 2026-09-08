@@ -117,6 +117,19 @@ class TestDelegateRequirements(unittest.TestCase):
         # sessions never see (still enforced via DELEGATE_BLOCKED_TOOLS).
         self.assertNotIn("send_message", desc)
 
+    def test_top_level_description_routes_parallel_vs_linear_first(self):
+        """The parallel-vs-linear routing rule must open the description, ahead of the
+        background/dispatch mechanics: an opening that reads as 'pass every task here'
+        made models delegate singular, linear work."""
+        from tools.delegate_tool import _build_top_level_description
+
+        desc = _build_top_level_description()
+        routing = desc.lower().find("linear")
+        mechanics = desc.find("Dispatch returns immediately")
+        self.assertGreater(routing, -1)
+        self.assertLess(routing, mechanics)
+        self.assertNotIn("Pass every task", desc)
+
     def test_dynamic_limits_moved_to_param_descriptions(self):
         """Concurrency reaches the model through the tasks parameter
         description; the depth ceiling lives in the top-level description's
