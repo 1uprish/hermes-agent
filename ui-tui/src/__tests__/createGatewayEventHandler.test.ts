@@ -90,6 +90,24 @@ describe('createGatewayEventHandler', () => {
     expect(getUiState().status).toBe('ready')
     expect(getOverlayState().approval).toBeNull()
     expect(getTurnState().tools).toEqual([])
+    onEvent({
+      session_id: 'focused',
+      payload: { ...snapshot, running: true, execution_generation: 2 },
+      type: 'session.info'
+    } as any)
+    onEvent({
+      session_id: 'focused',
+      payload: { running: false, execution_generation: 1 },
+      type: 'session.info'
+    } as any)
+    expect(getUiState().busy).toBe(true)
+    onEvent({
+      session_id: 'focused',
+      payload: { running: false, execution_generation: 2 },
+      type: 'session.info'
+    } as any)
+    expect(getUiState().busy).toBe(false)
+    expect(getUiState().info?.model).toBe('test')
   })
 
   it('archives incomplete todos into transcript flow at end of turn so they scroll up', () => {
