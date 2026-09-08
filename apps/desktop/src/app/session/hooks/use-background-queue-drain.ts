@@ -122,12 +122,14 @@ export function useBackgroundQueueDrain({
             submitTextRef.current(liveEntry.text, {
               attachments: liveEntry.attachments,
               fromQueue: true,
+              submission_id: liveEntry.id,
+              ...(liveEntry.displayText ? { displayText: liveEntry.displayText } : {}),
               sessionId: runtimeSessionId,
               storedSessionId: sessionKey
             })
           )
 
-          if (accepted === false) {
+          if (accepted !== true) {
             return false
           }
 
