@@ -1,6 +1,22 @@
 name: CI review comment
 
-# Live-updating PR review comment.
+# Live-updating PR review comment + 0-job dispatch recovery.
+#
+# Two workflow_run trigger types, one job each:
+#
+# - ``in_progress`` (this workflow's original trigger) starts the poller
+#   that keeps the unified review comment live until CI completes.
+# - ``completed`` starts the 0-job dispatch recovery. GitHub
+#   intermittently creates a CI run that dispatches 0 jobs and records
+#   conclusion=failure (#103026). Nothing executes, so the red X says
+#   nothing about the code, and ``gh run rerun`` is rejected for such a
+#   run ("its workflow file may be broken"). A 0-job run never fires
+#   ``in_progress`` — it is created and completed in the same second, and
+#   GitHub names it by its workflow path (``.github/workflows/ci.yaml``)
+#   instead of the workflow name — so only the ``completed`` event can
+#   catch it. The recovery job re-dispatches CI on the unchanged head sha
+#   through the proven close/reopen recovery, and the resulting fresh run
+#   fires ``in_progress``, where the poller takes over like any other run.
 #
 # The poller runs for up to 40 minutes.
 # This run lives in its own workflow.
@@ -22,20 +38,24 @@ on:
     # ``requested`` fires at creation — the poller would wait out its
     # whole timeout on a run that never starts. ``in_progress`` fires
     # when the run actually starts, and it also fires on re-runs, which
-    # ``requested`` does not.
-    types: [in_progress]
+    # ``requested`` does not. ``completed`` is what the 0-job recovery
+    # needs: that signature only exists at completion.
+    types: [in_progress, completed]
 
 permissions:
   contents: read
   actions: read
   pull-requests: write
 
-# One poller per CI run. A new push starts a new CI run, and its poller
-# cancels the poller of the run that GitHub superseded. The group keys
-# on the head repository too: fork PRs often share a branch name
-# (``main``, ``patch-1``), and two PRs must not cancel each other.
+# One run per (CI run, trigger type). A new push starts a new CI run, and
+# its poller cancels the poller of the run that GitHub superseded. The
+# group keys on the head repository too: fork PRs often share a branch
+# name (``main``, ``patch-1``), and two PRs must not cancel each other.
+# The trigger status is part of the key so a ``completed``-event run
+# (recovery) never cancels the ``in_progress``-event run (poller) of the
+# same CI run.
 concurrency:
-  group: ci-review-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  group: ci-review-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}-${{ github.event.workflow_run.status }}
   cancel-in-progress: true
 
 jobs:
@@ -44,6 +64,7 @@ jobs:
     # Fork PRs get no comment: the poller needs a write token, and the
     # ``pull_requests`` payload is empty for a fork run.
     if: >-
+      github.event.workflow_run.status == 'in_progress' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
@@ -78,3 +99,86 @@ jobs:
           python3 -u scripts/ci/live_comment.py \
             --interval 15 \
             --timeout 3000
+
+  recover-empty-dispatch:
+    name: Re-dispatch 0-job CI runs
+    # Same-repo only (copied from the poller job): fork runs have no
+    # commentable PR from this token. ``pull_request`` event only: CI
+    # push runs on main are not PR-attributable.
+    if: >-
+      github.event.workflow_run.status == 'completed' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Re-dispatch CI on a 0-job failure
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -uo pipefail
+
+          CONCLUSION=$(gh api "repos/$REPO/actions/runs/$CI_RUN_ID" --jq .conclusion)
+          if [ "$CONCLUSION" != "failure" ]; then
+            echo "CI run $CI_RUN_ID concluded $CONCLUSION — nothing to recover."
+            exit 0
+          fi
+
+          TOTAL=$(gh api "repos/$REPO/actions/runs/$CI_RUN_ID/jobs?per_page=1" --jq .total_count)
+          if [ "$TOTAL" != "0" ]; then
+            echo "CI run $CI_RUN_ID dispatched $TOTAL job(s) — a real result, not a 0-job dispatch."
+            exit 0
+          fi
+
+          # workflow_run.pull_requests is empty for these runs (and often
+          # in general), so resolve the open PR from the head sha instead.
+          PR_NUMBER=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" \
+            --jq '[.[] | select(.state == "open")][0].number // empty')
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No open PR for $HEAD_SHA — nothing to recover."
+            exit 0
+          fi
+
+          # Loop guard: count CI runs for this sha. Each close/reopen
+          # creates one more, so >= 3 means two re-dispatches already
+          # 0-jobbed again — stop instead of churning the PR.
+          RUNS=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&per_page=100" \
+            --jq '[.workflow_runs[] | select(.name == "CI" or .name == ".github/workflows/ci.yaml")] | length')
+          if [ "$RUNS" -ge 3 ]; then
+            echo "CI run $CI_RUN_ID: sha $HEAD_SHA already has $RUNS CI runs — repeated 0-job dispatches, giving up."
+            exit 0
+          fi
+
+          # Don't stack: if a CI run for this sha is already in flight, a
+          # fresh dispatch is on its way (or the branch moved) — the 0-job
+          # run is superseded either way.
+          IN_FLIGHT=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&per_page=100" \
+            --jq '[.workflow_runs[] | select(.status == "queued" or .status == "in_progress" or .status == "requested" or .status == "waiting")] | length')
+          if [ "$IN_FLIGHT" -gt 0 ]; then
+            echo "CI run $CI_RUN_ID: a CI run for $HEAD_SHA is already in flight — skipping."
+            exit 0
+          fi
+
+          echo "CI run $CI_RUN_ID: 0-job failure on ${HEAD_SHA:0:7} — re-dispatching CI on PR #$PR_NUMBER via close/reopen."
+          # ``gh run rerun`` is rejected for 0-job runs ("its workflow file
+          # may be broken"), so re-dispatch the same head through the
+          # proven recovery: close + reopen fires the ``reopened``
+          # pull_request event, which starts a fresh CI run on the
+          # unchanged head sha.
+          gh pr close "$PR_NUMBER" --repo "$REPO" || {
+            echo "Failed to close PR #$PR_NUMBER (state changed?) — not reopening."
+            exit 0
+          }
+          for attempt in 1 2 3; do
+            if gh pr reopen "$PR_NUMBER" --repo "$REPO"; then
+              echo "Reopened PR #$PR_NUMBER — fresh CI dispatch started."
+              exit 0
+            fi
+            echo "Reopen attempt $attempt failed; retrying..."
+            sleep 5
+          done
+          echo "Giving up on reopening PR #$PR_NUMBER — reopen it manually."
+          exit 1
