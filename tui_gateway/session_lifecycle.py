@@ -459,6 +459,9 @@ def _reattach_refusal(rid, sid: str, session: dict) -> dict | None:
     """Under ``_session_resume_lock``: why a reattaching RPC (resume/activate/prompt.submit) must NOT rebind
     ``session`` — it is stale, or a client-gone interrupt is still settling and the reap Timer must keep
     polling. None when the reattach may proceed."""
+    fence = getattr(current_transport(), "attach_fence", None)
+    if fence is not None and (session is not fence.session or not fence.valid()):
+        return _err(rid, 4409, "session owner changed or unavailable")
     if _sessions.get(sid) is not session:
         return _err(rid, 4007, "session no longer live; retry resume")
     if session.get("_client_gone_interrupt_requested"):

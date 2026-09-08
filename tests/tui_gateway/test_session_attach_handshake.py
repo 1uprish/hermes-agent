@@ -23,6 +23,10 @@ def owner(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setattr(server, "_load_cfg", lambda: {})
     monkeypatch.setattr(server, "_sessions", {})
+    from hermes_state import SessionDB
+    db = SessionDB(home / "state.db")
+    db.create_session("durable-owner", source="tui")
+    monkeypatch.setattr(server, "_get_db", lambda: db)
     monkeypatch.setattr(web.app.state, "bound_host", "127.0.0.1", raising=False)
     monkeypatch.setattr(web.app.state, "bound_port", 18765, raising=False)
     monkeypatch.setattr(web.app.state, "trusted_public_hosts", frozenset(), raising=False)
@@ -38,6 +42,7 @@ def owner(tmp_path, monkeypatch):
     yield web, server, home, lease, client, active_session_registry_snapshot
     lease.release()
     client.close()
+    db.close()
 
 
 def test_private_advertisement_auth_and_identity_fences(owner, monkeypatch):
@@ -120,3 +125,71 @@ def test_upgrade_rechecks_owner_after_handshake(owner, monkeypatch, gated, bind_
                           headers={"Authorization": record["authorization"]}).status_code == 409
     finally:
         second.release()
+
+
+def rpc(ws, method, **params):
+    ws.send_json({"jsonrpc": "2.0", "id": method, "method": method, "params": params})
+    while True:
+        frame = json.loads(ws.receive_text())
+        if frame.get("id") == method:
+            return frame
+
+
+def attach_url(home, lease, client):
+    record = json.loads(next((home / "runtime/session-attach").glob("*.json")).read_text())
+    response = client.get("/api/session-attach", params={
+        "session_id": "durable-owner", "lease_id": lease.lease_id, "profile_home": str(home)},
+        headers={"Authorization": record["authorization"]})
+    assert response.status_code == 200
+    return response.json()["websocket_url"]
+
+
+@pytest.mark.linux_only
+@pytest.mark.parametrize("lost", ["released", "replaced", "removed"])
+def test_resume_after_upgrade_never_recreates_or_reclaims_owner(owner, lost):
+    _, server, home, lease, client, snapshot = owner
+    original = server._sessions["live-owner"]
+    with client.websocket_connect(attach_url(home, lease, client)) as ws:
+        ws.receive_text()
+        if lost == "released":
+            lease.release()
+        elif lost == "replaced":
+            server._sessions["live-owner"] = dict(original)
+        else:
+            server._sessions.pop("live-owner")
+        before = snapshot(home, strict=True)
+        result = rpc(ws, "session.resume", session_id="durable-owner", lazy=True, force=True)
+        assert result.get("error", {}).get("code") == 4409, result
+        assert snapshot(home, strict=True) == before
+        assert len(server._sessions) == (0 if lost == "removed" else 1)
+
+
+@pytest.mark.linux_only
+def test_same_socket_follows_own_compression_but_not_a_replacement_lease(owner):
+    _, server, home, lease, client, snapshot = owner
+    original = server._sessions["live-owner"]
+    original.update(history=[], agent=None, running=False)
+    with client.websocket_connect(attach_url(home, lease, client)) as ws:
+        ws.receive_text()
+        first = rpc(ws, "session.resume", session_id="durable-owner", lazy=True)
+        assert first.get("result", {}).get("session_id") == "live-owner", first
+        assert server._transfer_active_session_slot("live-owner", original, new_session_id="compressed")
+        original["session_key"] = "compressed"
+        resumed = rpc(ws, "session.resume", session_id="durable-owner", lazy=True)
+        assert resumed.get("result", {}).get("session_id") == "live-owner", resumed
+        assert resumed["result"]["resumed"] == "compressed"
+        lease.release()
+        replacement, error = server._claim_active_session_slot(
+            "compressed", live_session_id="live-owner", profile_home=home)
+        assert error is None
+        original["active_session_lease"] = replacement
+        try:
+            before = snapshot(home, strict=True)
+            refused = rpc(ws, "session.resume", session_id="compressed", lazy=True, force=True)
+            assert refused.get("error", {}).get("code") == 4409, refused
+            assert rpc(ws, "prompt.submit", session_id="live-owner", prompt="not admitted").get(
+                "error", {}).get("code") == 4409
+            assert snapshot(home, strict=True) == before
+            assert server._sessions["live-owner"] is original
+        finally:
+            replacement.release()

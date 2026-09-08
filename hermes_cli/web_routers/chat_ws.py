@@ -554,6 +554,7 @@ async def gateway_ws(ws: WebSocket) -> None:
         ws,
         auth_identity=getattr(ws, "_hermes_auth_identity", None),
         subprotocol=getattr(ws, "_hermes_ws_subprotocol", None),
+        dispatch=getattr(ws, "_hermes_attach_fence", None),
     )
 
 
