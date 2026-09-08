@@ -2174,6 +2174,7 @@ export interface Translations {
     openDirective: string
     queueMessage: string
     steer: string
+    redirect: string
     stop: string
     send: string
     speaking: string
