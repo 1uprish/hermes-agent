@@ -875,7 +875,10 @@ def _run_prompt_submit(
         return goal_followup
 
     def run():
+        from tui_gateway.prompt_execution import event_authority
         nonlocal execution_status
+        token = event_authority.set({"execution_epoch": execution_snapshot(session)["execution_epoch"],
+                                     "execution_generation": generation})
         goal_followup = None
         try:
             goal_followup = run_turn()
@@ -887,7 +890,10 @@ def _run_prompt_submit(
             except Exception:
                 logger.exception("outer turn recovery failed")
         finally:
-            settled = settle(execution_status)
+            try:
+                settled = settle(execution_status)
+            finally:
+                event_authority.reset(token)
         if settled:
             try:
                 _emit_settled_session_info(sid, session, st.agent)
@@ -897,7 +903,7 @@ def _run_prompt_submit(
                 _run_post_turn_followups(rid, sid, session, st.result, goal_followup)
 
     try:
-        _emit("message.start", sid)
+        _emit("message.start", sid, execution_snapshot(session))
         run_thread = threading.Thread(target=run, daemon=True)
         with _sessions_lock:
             registered = _sessions.get(sid)

@@ -4,6 +4,12 @@ Only explicit turn completion releases running; elapsed time is not ownership.
 These helpers retain their own globals rather than the gateway facade's bindings.
 """
 
+from contextvars import ContextVar
+import uuid
+
+_EPOCH = uuid.uuid4().hex
+event_authority = ContextVar("prompt_event_authority", default=None)
+
 
 def begin_execution(session: dict) -> int:
     from .prompt_admission import next_generation
@@ -26,9 +32,17 @@ def settle_execution(session: dict, generation: int, status: str) -> bool:
 
 
 def execution_snapshot(session: dict) -> dict:
-    with session["history_lock"]:
-        return {
-            "execution_generation": int(session.get("_execution_generation", 0)),
-            "execution_state": "running" if session.get("running") else session.get("_execution_state", "idle"),
-            "running": bool(session.get("running")),
-        }
+    # Copy the dictionary once: projections also run inside an already-owned
+    # non-reentrant history lock. Writers publish authority with dict.update.
+    state = session.copy()
+    return {
+        "execution_epoch": _EPOCH,
+        "execution_generation": int(state.get("_execution_generation", 0)),
+        "execution_state": "running" if state.get("running") else state.get("_execution_state", "idle"),
+        "running": bool(state.get("running")),
+    }
+
+
+def session_authority(session: dict) -> dict:
+    from .prompt_admission import admission_snapshot
+    return {**admission_snapshot(session), **execution_snapshot(session)}
