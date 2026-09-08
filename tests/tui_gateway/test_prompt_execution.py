@@ -90,6 +90,7 @@ def test_stale_generation_cannot_settle_a_newer_execution():
     assert not prompt_execution.settle_execution(session, first, "error")
     assert session["running"] is True
     assert prompt_execution.execution_snapshot(session) == {
-        "execution_generation": second, "execution_state": "running", "running": True}
+        "execution_generation": second, "execution_state": "running", "running": True,
+        "execution_epoch": prompt_execution.execution_snapshot(session)["execution_epoch"]}
     assert prompt_execution.settle_execution(session, second, "complete")
     assert session["running"] is False
