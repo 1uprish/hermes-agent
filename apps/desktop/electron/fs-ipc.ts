@@ -200,4 +200,69 @@ export function registerFsIpc({
 
     return true
   })
+
+  // Create a DIRECT CHILD directory under the local desktop-plugins root —
+  // onboarding's first-screen artifact materializes as its own folder there
+  // before fs:writeText fills it. Scoped to one level under the plugins root
+  // (never an arbitrary path) so the renderer can't mkdir into the profile.
+  ipcMain.handle('hermes:fs:mkdirDesktopPlugin', async (_event, name) => {
+    const dirName = String(name ?? '').trim()
+
+    if (!dirName || dirName === '.' || dirName === '..' || /[\\/]/.test(dirName)) {
+      throw new Error('Invalid plugin directory name')
+    }
+
+    const root = await localPluginsRoot('desktop-plugins')
+    const dir = path.join(root, dirName)
+
+    if (path.dirname(dir) !== root) {
+      throw new Error('Invalid plugin directory')
+    }
+
+    try {
+      await fs.promises.mkdir(dir, { recursive: true })
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), path: dir }
+    }
+
+    return { ok: true, path: dir }
+  })
+
+  // Materialize an agent SKILL: `<HERMES_HOME>/skills/<name>/SKILL.md`.
+  // Onboarding writes the dashboard's companion skill here so EVERY session —
+  // guided or fresh — loads the schema and contracts from the skill index
+  // instead of spelunking renderer source ("Let me find how the renderer
+  // reads this file" happened in a live run). Same one-level scoping as
+  // mkdirDesktopPlugin: lowercase skill-name slug, direct child only.
+  ipcMain.handle('hermes:fs:materializeSkill', async (_event, name, content) => {
+    const skillName = String(name ?? '').trim()
+
+    if (!skillName || !/^[a-z0-9][a-z0-9-_]{0,63}$/.test(skillName)) {
+      throw new Error('Invalid skill name')
+    }
+
+    const text = String(content ?? '')
+
+    if (!text.trim() || text.length > 200_000) {
+      throw new Error('Invalid skill content')
+    }
+
+    const profile = readActiveDesktopProfile()
+    const base = profile && profile !== 'default' ? path.join(hermesHome, 'profiles', profile) : hermesHome
+    const root = path.join(base, 'skills')
+    const dir = path.join(root, skillName)
+
+    if (path.dirname(dir) !== root) {
+      throw new Error('Invalid skill directory')
+    }
+
+    try {
+      await fs.promises.mkdir(dir, { recursive: true })
+      await fs.promises.writeFile(path.join(dir, 'SKILL.md'), text, 'utf8')
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), path: dir }
+    }
+
+    return { ok: true, path: path.join(dir, 'SKILL.md') }
+  })
 }

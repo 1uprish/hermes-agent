@@ -5,6 +5,8 @@ import { type ClipboardEvent, type FormEvent, type KeyboardEvent, useCallback, u
 import { useTourMarker } from '@/app/chat/tour-marker'
 import { useHudComposerDrag } from '@/app/hud/composer-drag'
 import { composerFill, composerFloatingStrip, composerSurfaceGlass } from '@/components/chat/composer-dock'
+import { $chatOnboardingSolo, $chatOnboardingThreadIds } from '@/components/onboarding-chat/assembly'
+import { OnboardingSkip } from '@/components/onboarding-chat/skip'
 import { Button } from '@/components/ui/button'
 import { Slot as ContribSlot } from '@/contrib/react/slot'
 import { useI18n } from '@/i18n'
@@ -181,6 +183,12 @@ export function ChatBar({
   const statusSessionId = sessionId ?? null
 
   const composerTourMarker = useTourMarker('composer')
+  // The guided-onboarding conversation never shows the git strip — branch,
+  // ±, worktrees are exactly the machinery that first run is hiding. Solo
+  // covers the moments before the session ids are known.
+  const onboardingThreadIds = useStore($chatOnboardingThreadIds)
+  const chatOnboardingSolo = useStore($chatOnboardingSolo)
+  const hideCodingRow = chatOnboardingSolo || (sessionId != null && onboardingThreadIds.includes(sessionId))
 
   // Coarse edge: re-renders ChatBar only when the stack shows/hides, NOT on
   // every per-item status mutation or other sessions' churn (see the hook).
@@ -1189,6 +1197,7 @@ export function ChatBar({
           <div className={cn(composerFloatingStrip, 'px-[5px] pb-1.5 empty:hidden')}>
             <ActionBadges sessionId={statusSessionId} />
             <SuggestionPills sessionId={statusSessionId} />
+            <OnboardingSkip />
           </div>
           {/* Session-scoped status stack (todos, subagents, background tasks,
               queue). An in-flow dock child: the dock is bottom-anchored, so it
@@ -1317,21 +1326,23 @@ export function ChatBar({
                     composerSurfaceGlass
                   )}
                 />
-                <CodingStatusRow
-                  onBranchOff={handleBranchOff}
-                  onConvertBranch={handleConvertBranch}
-                  onListBranches={handleListBranches}
-                  // A tile's rail reviews ITS worktree: pin the pane's scope to
-                  // this surface's cwd. Main keeps the classic follow-the-
-                  // active-session scope (null).
-                  onOpen={() => toggleReview(scope.target === 'main' ? null : (cwd ?? null), scope.target)}
-                  onOpenWorktree={openInWorktree}
-                  onSwitchBranch={handleSwitchBranch}
-                  // Blank in a bot chat: the row hides itself without a repo,
-                  // and stops probing git / GitHub for a surface that has no
-                  // branch to show. Cheaper than a second composer.
-                  repoPath={botChat ? undefined : cwd}
-                />
+                {!hideCodingRow && (
+                  <CodingStatusRow
+                    onBranchOff={handleBranchOff}
+                    onConvertBranch={handleConvertBranch}
+                    onListBranches={handleListBranches}
+                    // A tile's rail reviews ITS worktree: pin the pane's scope to
+                    // this surface's cwd. Main keeps the classic follow-the-
+                    // active-session scope (null).
+                    onOpen={() => toggleReview(scope.target === 'main' ? null : (cwd ?? null), scope.target)}
+                    onOpenWorktree={openInWorktree}
+                    onSwitchBranch={handleSwitchBranch}
+                    // Blank in a bot chat: the row hides itself without a repo,
+                    // and stops probing git / GitHub for a surface that has no
+                    // branch to show. Cheaper than a second composer.
+                    repoPath={botChat ? undefined : cwd}
+                  />
+                )}
                 <div
                   className={cn(
                     'relative z-1 flex min-h-0 w-full flex-col gap-(--composer-row-gap) overflow-hidden rounded-[inherit] px-(--composer-surface-pad-x) py-(--composer-surface-pad-y) transition-opacity duration-200 ease-out',

@@ -13,6 +13,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { type CSSProperties, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 
+import { PROMPT_SUBMIT_REQUEST_TIMEOUT_MS } from '@/api/client'
 import { graftRefreshedTailOntoBackfill } from '@/app/chat/transcript-backfill'
 import { formatRefValue } from '@/components/assistant-ui/directive-text'
 import { BootFailureOverlay } from '@/components/boot-failure-overlay'
@@ -21,9 +22,30 @@ import { DesktopInstallOverlay } from '@/components/desktop-install-overlay'
 import { FindBar } from '@/components/find-bar'
 import { FreeTierSignInDialog } from '@/components/free-tier/sign-in-dialog'
 import { GatewayConnectingOverlay } from '@/components/gateway-connecting-overlay'
+import { IntroRevealGate } from '@/components/intro-reveal'
 import { NotificationStack } from '@/components/notifications'
 import { DesktopOnboardingOverlay } from '@/components/onboarding'
-import { $newSessionTabAction, registerPaneCloser } from '@/components/pane-shell/tree/store'
+import { $chatOnboardingThreadIds, pickOnboardingGreeting, startChatOnboardingSolo } from '@/components/onboarding-chat/assembly'
+import {
+  $setupBotSession,
+  $setupHandoff,
+  buildHandoffCompleteNote,
+  buildHandoffFailedNote,
+  buildTaskBotSeedMessages,
+  ensureSetupBotProfile,
+  FAST_LANE,
+  markSetupHandoffDone,
+  mintTaskBotProfile,
+  pinFastLane,
+  SETUP_BOT_LOOK,
+  SETUP_BOT_PROFILE,
+  SETUP_BOT_TITLE,
+  stampBotMeta,
+  TASK_BOT_LOOK,
+  taskBotTitle
+} from '@/components/onboarding-chat/setup-bot'
+import { OnboardingWizardGate } from '@/components/onboarding-wizard'
+import { $newSessionTabAction, registerPaneCloser, setActiveTreePane } from '@/components/pane-shell/tree/store'
 import {
   $workspaceMode,
   $workspaceNewSessionTarget,
@@ -46,12 +68,21 @@ import { $desktopBoot } from '@/store/boot'
 import { requestVoiceConversationStart } from '@/store/composer'
 import { $activeConnectionId } from '@/store/connections'
 import { $cronReviewRequest, setCronFocusJobId } from '@/store/cron'
+import { requestGatewayForProfile } from '@/store/gateway'
 import { $pinnedSessionIds, pinSession, restoreWorktree, unpinSession } from '@/store/layout'
-import { notifyError } from '@/store/notifications'
+import { loadMachineProfile } from '@/store/machine'
+import { notify, notifyError } from '@/store/notifications'
+import {
+  $wizardAnswers,
+  buildChatOnboardingSeedMessages,
+  buildKickoffPrompt,
+  markGuideKickoffStarted
+} from '@/store/onboarding-wizard'
 import { $previewTarget } from '@/store/preview'
 import {
   $activeGatewayProfile,
   $freshSessionRequest,
+  $newChatProfile,
   $profileScope,
   ALL_PROFILES,
   ensureGatewayProfile,
@@ -626,6 +657,305 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     })
   }, [newProjectSessionRequest, openNewSessionTile])
 
+  // Onboarding handoff: the first chat starts itself.
+  // 'guide' seeds the WHOLE opening at session.create — the invisible runbook
+  // (display_kind=hidden) plus a PRE-WRITTEN assistant greeting — so the
+  // first thing the user sees paints instantly, zero generation wait. No
+  // prompt.submit: the model's first real turn is its reply to the user's
+  // name. 'greet' keeps the classic hidden-kickoff shape (Hermes generates
+  // the opener from the wizard's answers).
+  //
+  // Bot mode: the guided chat belongs to a persistent `hermes-setup` profile
+  // ("Setup" in the bot roster) and is minted as its hidden canonical "Bot
+  // Chat" — so the guide outlives onboarding as a bot the user can always
+  // come back to. If the profile can't be created (older backend), the chat
+  // falls back to the profile-less shape and everything still works.
+  const kickoffFirstChat = useCallback(
+    (kind: 'greet' | 'guide' = 'greet') => {
+      if (kind === 'guide') {
+        // The opening line is PRE-BANKED and on screen before anything else
+        // happens — picked synchronously so the thread's first paint has it.
+        pickOnboardingGreeting()
+        // Solo mode: chat-only layout, no statusbar — the app assembles
+        // around the conversation when the layout card is answered.
+        startChatOnboardingSolo()
+      }
+      void (async () => {
+        // Ask the host what it is BEFORE composing the runbook: a machine that
+        // is barely out of the box changes what the flow leads with.
+        if (kind === 'guide') {
+          await loadMachineProfile()
+        }
+
+        const seedMessages = kind === 'guide' ? buildChatOnboardingSeedMessages(pickOnboardingGreeting()) : undefined
+        let asSetupBot = kind === 'guide' ? await ensureSetupBotProfile(requestGateway) : false
+
+        if (asSetupBot) {
+          // selectProfile-style: point new chats at the setup profile and make
+          // its backend the active gateway BEFORE creating — the guided chat
+          // then lives where every later ambient RPC (submit, hydration,
+          // streaming) will look for it, exactly like any bot chat.
+          try {
+            $newChatProfile.set(SETUP_BOT_PROFILE)
+            await ensureGatewayProfile(SETUP_BOT_PROFILE)
+          } catch (error) {
+            console.warn('[setup-bot] setup profile swap failed', error)
+            $newChatProfile.set(null)
+            asSetupBot = false
+          }
+        }
+
+        if (asSetupBot) {
+          // Adopt-before-mint (the bots-contract registry rule): Setup's
+          // canonical Bot Chat may already exist — a relaunch mid-onboarding,
+          // a dev re-kick. Minting a second one can never win: UNIQUE(title)
+          // turns the new 'Bot Chat' stamp into a silent no-op and the
+          // auto-titler names the stray (a live tab read "BROOKLYN").
+          // Exact-title registry lookup; a hit IS the chat — resume it and
+          // pick up wherever the conversation left off.
+          const registryHit = await requestGateway<{ sessions?: { id: string; resolved_id?: string }[] }>(
+            'session.list',
+            { include_hidden: true, title: 'Bot Chat' }
+          ).catch(() => null)
+
+          const canonical = registryHit?.sessions?.[0]
+
+          if (canonical?.id) {
+            markGuideKickoffStarted()
+            await resumeSession(canonical.resolved_id ?? canonical.id, true)
+
+            const adoptedRuntimeId = $activeSessionId.get()
+
+            $chatOnboardingThreadIds.set(
+              adoptedRuntimeId ? [canonical.id, adoptedRuntimeId] : [canonical.id]
+            )
+            $setupBotSession.set({
+              profile: SETUP_BOT_PROFILE,
+              runtimeId: adoptedRuntimeId ?? canonical.id,
+              storedId: canonical.id
+            })
+
+            // An adopted chat needs the fast lane just as much as a minted one
+            // — it IS the guided chat. Resuming without this put Setup back on
+            // the user's thinking default, where a locked card reads as a
+            // frozen app.
+            await pinFastLane(requestGateway, adoptedRuntimeId ?? canonical.id)
+
+            return
+          }
+        }
+
+        const runtimeId = await createBackendSessionForSend(
+          null,
+          seedMessages,
+          kind === 'guide'
+            ? { ...(asSetupBot ? { hidden: true, title: 'Bot Chat' } : {}), model: FAST_LANE }
+            : undefined
+        )
+
+        if (!runtimeId) {
+          return
+        }
+
+        if (kind === 'guide') {
+          // The seeded session exists — NOW burn the persistent latch, so a
+          // pre-create crash retries the handoff but a relaunch after this
+          // resumes the normal app.
+          markGuideKickoffStarted()
+
+          // Mark this thread as the guided one (transcript treatment, no git
+          // strip). Both ids: the thread list keys by the STORED session id
+          // (that's what the route and sidebar select), the composer by the
+          // runtime id.
+          const storedId = $selectedStoredSessionId.get()
+
+          $chatOnboardingThreadIds.set(storedId ? [storedId, runtimeId] : [runtimeId])
+
+          // Remembered for the handoff's whisper back, and pinned as Setup's
+          // canonical chat so the roster row previews/opens this very thread.
+          $setupBotSession.set({ profile: asSetupBot ? SETUP_BOT_PROFILE : null, runtimeId, storedId })
+
+          if (asSetupBot && storedId) {
+            void stampBotMeta(requestGateway, SETUP_BOT_PROFILE, {
+              ...SETUP_BOT_LOOK,
+              chat: storedId,
+              title: SETUP_BOT_TITLE
+            })
+          }
+
+          // Name the thread NOW, explicitly: the runbook is persisted as a
+          // (hidden) user message, and the backend's auto-titler happily
+          // derives a title from it (or from the user's first words — a live
+          // run's tab read "call me BK"). A manual title holds highest
+          // authority (set_session_title), so the titler never reconsiders —
+          // and 'Bot Chat' IS the canonical-registry name the bot roster
+          // resolves the forever-chat by.
+          await requestGateway('session.title', {
+            session_id: runtimeId,
+            title: asSetupBot ? 'Bot Chat' : 'Welcome to Hermes'
+          }).catch(() => undefined)
+
+          await pinFastLane(requestGateway, runtimeId)
+
+          // No kickoff prompt.submit: the runbook and the greeting are seeded
+          // rows, and the greeting the user watches type itself in is the
+          // banked line (thread list) — the model's first real turn is its
+          // reply to the user's name.
+          return
+        }
+
+        // 'greet' only from here: guide returned above (its opening is
+        // seeded, not prompted).
+        setAwaitingResponse(true)
+        setBusy(true)
+
+        await requestGateway(
+          'prompt.submit',
+          {
+            display_kind: 'hidden',
+            session_id: runtimeId,
+            text: buildKickoffPrompt($wizardAnswers.get())
+          },
+          PROMPT_SUBMIT_REQUEST_TIMEOUT_MS
+        ).catch(() => {
+          setAwaitingResponse(false)
+          setBusy(false)
+        })
+      })()
+    },
+    [createBackendSessionForSend, requestGateway, resumeSession]
+  )
+
+  // Bot-mode handoff: Setup decided the first task (the HandoffCard raised
+  // $setupHandoff) — mint a bot around it, seed its hidden Bot Chat with the
+  // work-side runbook, move the user there, and start the build from Setup's
+  // brief as a real visible turn. Setup's chat stays alive: it gets a hidden
+  // [setup] note so it can close the loop and schedule its check-ins. On any
+  // failure Setup is told to build in its own chat instead (PR-12 shape), so
+  // the flow never dead-ends.
+  const setupHandoff = useStore($setupHandoff)
+
+  useEffect(() => {
+    if (setupHandoff?.phase !== 'pending') {
+      return
+    }
+
+    const { brief, plan, surface, task } = setupHandoff
+
+    $setupHandoff.set({ ...setupHandoff, phase: 'minting' })
+
+    void (async () => {
+      const setupSession = $setupBotSession.get()
+
+      // The guide chat lives on the setup profile's own backend; by whisper
+      // time the ACTIVE gateway is the task bot's, so route explicitly.
+      const whisperToSetup = (text: string) => {
+        if (!setupSession) {
+          return
+        }
+
+        const params = { display_kind: 'hidden', session_id: setupSession.runtimeId, text }
+
+        void (
+          setupSession.profile
+            ? requestGatewayForProfile(setupSession.profile, 'prompt.submit', params, PROMPT_SUBMIT_REQUEST_TIMEOUT_MS)
+            : requestGateway('prompt.submit', params, PROMPT_SUBMIT_REQUEST_TIMEOUT_MS)
+        ).catch(() => undefined)
+      }
+
+      const previousNewChatProfile = $newChatProfile.get()
+
+      try {
+        const answers = $wizardAnswers.get()
+        const botTitle = taskBotTitle(task)
+        let botName: string | undefined
+
+        if (surface === 'bot') {
+          botName = await mintTaskBotProfile(requestGateway, task, answers, plan)
+          // Same selectProfile-style swap as the kickoff: the task bot's chat
+          // is created on (and every later ambient RPC lands on) its backend.
+          $newChatProfile.set(botName)
+          await ensureGatewayProfile(botName)
+        } else {
+          // A plain session belongs in the user's normal working context, so
+          // target `default` EXPLICITLY — the active gateway is Setup's own
+          // profile right now, and a null target means "keep the current one".
+          $newChatProfile.set(null)
+          await ensureGatewayProfile('default')
+        }
+
+        const runtimeId = await createBackendSessionForSend(
+          brief,
+          buildTaskBotSeedMessages(task, answers, surface, plan),
+          // A bot's chat is its hidden canonical registry row; a session is an
+          // ordinary visible row the user finds by the task's name.
+          surface === 'bot' ? { hidden: true, title: 'Bot Chat' } : { title: botTitle }
+        )
+
+        if (!runtimeId) {
+          throw new Error('task session create failed')
+        }
+
+        const storedId = $selectedStoredSessionId.get()
+
+        if (botName) {
+          void stampBotMeta(requestGateway, botName, {
+            ...TASK_BOT_LOOK,
+            ...(storedId ? { chat: storedId } : {}),
+            title: botTitle
+          })
+
+          // The first build keeps the first-run treatment (no git strip, no
+          // floating user panels) — the task chat joins the onboarding threads.
+          $chatOnboardingThreadIds.set([
+            ...$chatOnboardingThreadIds.get(),
+            ...(storedId ? [storedId] : []),
+            runtimeId
+          ])
+        } else {
+          // Session mode IS the normal app: the git strip and the user's own
+          // panels belong here, so the thread stays out of the onboarding set.
+          // Assembly fronted BOTS when Setup was the only conversation — this
+          // build lives in Sessions, so hand the sidebar back to that tab.
+          setActiveTreePane('sessions')
+        }
+
+        // The go signal — Setup's brief lands as the user's first visible
+        // turn in the new chat, and the build starts from it. Painted
+        // optimistically (same trick as the guide greeting) so the new chat
+        // never opens empty while the submit round-trips.
+        setMessages(current => [
+          ...current,
+          {
+            id: `handoff-brief-${runtimeId}`,
+            parts: [{ text: brief, type: 'text' }],
+            role: 'user',
+            timestamp: Date.now() / 1000
+          }
+        ])
+        setAwaitingResponse(true)
+        setBusy(true)
+        await requestGateway(
+          'prompt.submit',
+          { session_id: runtimeId, text: brief },
+          PROMPT_SUBMIT_REQUEST_TIMEOUT_MS
+        ).catch(() => {
+          setAwaitingResponse(false)
+          setBusy(false)
+        })
+
+        markSetupHandoffDone()
+        $setupHandoff.set({ botName, botTitle, brief, phase: 'done', plan, surface, task })
+        whisperToSetup(buildHandoffCompleteNote(task, botTitle, surface))
+      } catch {
+        // Undo the half-swap so the user's chat context stays with the guide.
+        $newChatProfile.set(previousNewChatProfile)
+        $setupHandoff.set({ brief, phase: 'error', plan, surface, task })
+        whisperToSetup(buildHandoffFailedNote(task))
+      }
+    })()
+  }, [createBackendSessionForSend, requestGateway, setupHandoff])
+
   const composer = useComposerActions({ activeSessionId, currentCwd, requestGateway })
 
   const branchInNewChat = useCallback(
@@ -1190,6 +1520,8 @@ export function ContribWiring({ children }: { children: ReactNode }) {
       {/* The full real overlay set (mirrors DesktopController's `overlays`). */}
       <RemoteDisplayBanner />
       {!isAuxiliaryWindow() && <DesktopInstallOverlay />}
+      {!isAuxiliaryWindow() && <IntroRevealGate enabled={gatewayState === 'open'} />}
+      {!isAuxiliaryWindow() && <OnboardingWizardGate enabled={gatewayState === 'open'} onKickoff={kickoffFirstChat} />}
       {!isAuxiliaryWindow() && (
         <DesktopOnboardingOverlay
           enabled={gatewayState === 'open'}

@@ -176,7 +176,7 @@ export async function loadRuntimePlugin(
       // Reload = dispose the previous incarnation, then register fresh.
       unloadRuntimePlugin(plugin.id)
       const disposers: (() => void)[] = []
-      plugin.register(createPluginContext(plugin.id, dispose => disposers.push(dispose)))
+      plugin.register(createPluginContext(plugin.id, dispose => disposers.push(dispose), options.file))
       loaded.set(plugin.id, disposers)
       publishPlugin({ ...record, status: 'loaded' })
     }

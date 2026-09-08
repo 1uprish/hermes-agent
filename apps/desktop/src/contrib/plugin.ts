@@ -64,6 +64,16 @@ export interface PluginOs {
   pickOpenPath: (options?: PluginFileDialogOptions) => Promise<null | string>
   /** Write text to the system clipboard. Resolves false when unavailable. */
   writeClipboard: (text: string) => Promise<boolean>
+  /** Read a file INSIDE this plugin's own install folder — the directory its
+   *  plugin.js lives in. Names are per-segment validated (no `..`, no
+   *  backslashes, at most one `/`) so a plugin can only ever reach its own
+   *  tree. Resolves `{ text }`; rejects on a missing file or no fs door. */
+  readPluginFileText: (name: string) => Promise<{ text: string }>
+  /** Watch a file inside this plugin's install folder; fires `onChange` after
+   *  each settle and returns a disposer. Used for the plugin's own reactive
+   *  UI around its user-editable data file (screen.json) — loader-side
+   *  plugin.js hot-reload is separate. No-op without an fs door. */
+  watchPluginFile: (name: string, onChange: () => void) => () => void
 }
 
 export interface PluginFileDialogOptions {
@@ -141,10 +151,33 @@ function createPluginStorage(pluginId: string): PluginStorage {
   }
 }
 
+/** Plugin-relative file path: a bare filename or one-level subpath
+ *  (`screen.json`, `assets/logo.svg`), resolved against the folder the
+ *  plugin.js lives in. Returns null on anything that would leave it. */
+function resolvePluginFilePath(pluginFile: string, name: string): null | string {
+  const segments = String(name ?? '')
+    .split('/')
+    .filter(segment => segment.length > 0)
+
+  if (segments.length === 0 || segments.length > 2) {
+    return null
+  }
+
+  for (const segment of segments) {
+    if (segment === '.' || segment === '..' || segment.includes('\\')) {
+      return null
+    }
+  }
+
+  const dir = pluginFile.slice(0, Math.max(0, pluginFile.lastIndexOf('/')))
+
+  return `${dir}/${segments.join('/')}`
+}
+
 // Never throws for a missing capability: the renderer can outlive an older
 // Electron shell (or run in a plain browser), so every door degrades to a
-// false result the plugin can branch on.
-function createPluginOs(pluginId: string): PluginOs {
+// rejection a plugin's own .catch() sees, never an error-boundary crash.
+function createPluginOs(pluginId: string, pluginFile?: string): PluginOs {
   const attempt = async (run: (bridge: NonNullable<typeof window.hermesDesktop>) => Promise<boolean>) => {
     const bridge = typeof window === 'undefined' ? undefined : window.hermesDesktop
 
@@ -190,13 +223,57 @@ function createPluginOs(pluginId: string): PluginOs {
       }),
     pickSavePath: options => attemptPath(async bridge => (await bridge.selectSavePath?.(options)) ?? null),
     revealPath: path => attempt(async bridge => (bridge.revealPath ? bridge.revealPath(path) : false)),
-    writeClipboard: text => attempt(bridge => bridge.writeClipboard(text))
+    writeClipboard: text => attempt(bridge => bridge.writeClipboard(text)),
+    readPluginFileText: name => {
+      const target = pluginFile ? resolvePluginFilePath(pluginFile, name) : null
+      const read = window.hermesDesktop?.readFileText
+
+      if (!target || !read) {
+        return Promise.reject(new Error(`no plugin fs door for ${JSON.stringify(name)}`))
+      }
+
+      return read(target).then(({ text }) => ({ text }))
+    },
+    watchPluginFile: (name, onChange) => {
+      const target = pluginFile ? resolvePluginFilePath(pluginFile, name) : null
+
+      if (!target || !pluginFile) {
+        return () => {}
+      }
+
+      // No dedicated fs-watch IPC yet — the runtime loader's disk watcher
+      // already debounces plugin.js, so screen.json settles on the same
+      // cadence. Poll here gives the plugin its own reactive delivery knob
+      // without growing the bridge surface.
+      let last: string | undefined
+
+      const interval = window.setInterval(() => {
+        void window.hermesDesktop
+          ?.readFileText?.(target)
+          .then((raw: { text: string }) => {
+            if (raw.text !== last) {
+              last = raw.text
+              onChange()
+            }
+          })
+          .catch(() => {})
+      }, 2000)
+
+      return () => window.clearInterval(interval)
+    }
   }
 }
 
 /** Build the scoped context handed to a plugin's `register`. `onDispose`
- *  receives every registration's disposer (the loader's unload/reload hook). */
-export function createPluginContext(pluginId: string, onDispose?: (dispose: () => void) => void): PluginContext {
+ *  receives every registration's disposer (the loader's unload/reload hook).
+ *  `pluginFile` is the plugin's own plugin.js path on disk when known (the
+ *  runtime loader's disk door); the fs doors above no-op without it, so a
+ *  bundled plugin (shipped in-app, no file) degrades cleanly. */
+export function createPluginContext(
+  pluginId: string,
+  onDispose?: (dispose: () => void) => void,
+  pluginFile?: string
+): PluginContext {
   const source = `plugin:${pluginId}`
   const scope = (c: PluginContribution): Contribution => ({ ...c, id: `${pluginId}:${c.id}`, source })
 
@@ -213,7 +290,7 @@ export function createPluginContext(pluginId: string, onDispose?: (dispose: () =
     onDispose: fn => void track(fn),
     rest: <T>(path: string, opts?: PluginRestOptions) => pluginRest<T>(pluginId, path, opts),
     socket: (path, onMessage) => track(pluginSocket(pluginId, path, onMessage)),
-    os: createPluginOs(pluginId),
+    os: createPluginOs(pluginId, pluginFile),
     storage: createPluginStorage(pluginId),
     i18n: createPluginI18n(pluginId, track)
   }

@@ -6,8 +6,10 @@ import { SessionDraftTitle } from '@/app/chat/session-draft-title'
 import { SessionStatusDot } from '@/app/chat/session-status-dot'
 import { PALETTE_AREA, type PaletteContribution, paletteToggle } from '@/app/command-palette/contrib'
 import { type StatusbarItem } from '@/app/shell/statusbar-controls'
+import { AskDirective } from '@/components/assistant-ui/ask-directive'
 import { InlinePreviewDirective } from '@/components/assistant-ui/inline-preview-directive'
 import { IdleMount } from '@/components/idle-mount'
+import { OnboardingChatDirective } from '@/components/onboarding-chat/directive'
 import { $layoutEditMode, toggleLayoutEditMode } from '@/components/pane-shell/edit-mode'
 import { allPaneIds, group, groupLeafIds, split } from '@/components/pane-shell/tree/model'
 import { LayoutTreeRoot } from '@/components/pane-shell/tree/renderer'
@@ -306,6 +308,28 @@ registry.registerMany([
       render: ({ attrs, streaming }) => <InlinePreviewDirective attrs={attrs} streaming={streaming} />
     } satisfies TranscriptDirectiveContribution
   },
+  // In-chat guided setup: `::onboarding{step="focus|look|layout"}` renders an
+  // interactive picker inline in Hermes's message — the conversational twin
+  // of the wizard window (see onboarding-chat/directive.tsx).
+  {
+    id: 'transcript.onboarding',
+    area: TRANSCRIPT_DIRECTIVE_AREA,
+    data: {
+      name: 'onboarding',
+      render: ({ attrs, streaming }) => <OnboardingChatDirective attrs={attrs} streaming={streaming} />
+    } satisfies TranscriptDirectiveContribution
+  },
+  // `::ask{question="…" options="A|B|C" input="true"}` — the model's generic
+  // interactive question: option pills + optional type-and-go, in ANY session.
+  // The antidote to wall-of-text answers; dashboard flows lean on it hard.
+  {
+    id: 'transcript.ask',
+    area: TRANSCRIPT_DIRECTIVE_AREA,
+    data: {
+      name: 'ask',
+      render: ({ attrs, streaming }) => <AskDirective attrs={attrs} streaming={streaming} />
+    } satisfies TranscriptDirectiveContribution
+  },
   {
     id: 'layout.reset',
     area: PALETTE_AREA,
@@ -417,6 +441,10 @@ const DEFAULT_TREE = split(
 
 const FOCUS_TREE = split('row', [group(['sessions']), group(['workspace', 'files', 'review', 'terminal'])], [1, 4.6])
 
+// The onboarding "Basic" pick: the super-normie shape. Sessions + chat, no
+// terminal, no files/review tabs — nothing that needs explaining.
+const BASIC_TREE = split('row', [group(['sessions']), group(['workspace'])], [1, 4.6])
+
 const TERMINAL_TREE = split(
   'column',
   [
@@ -437,6 +465,7 @@ const QUAD_TREE = split(
 
 registry.registerMany([
   { id: 'default', area: 'layouts', title: 'Default', order: 0, data: DEFAULT_TREE },
+  { id: 'basic', area: 'layouts', title: 'Basic', order: 5, data: BASIC_TREE },
   { id: 'focus', area: 'layouts', title: 'Focus', order: 10, data: FOCUS_TREE },
   { id: 'terminal-deck', area: 'layouts', title: 'Terminal deck', order: 20, data: TERMINAL_TREE },
   { id: 'quad', area: 'layouts', title: 'Quad', order: 30, data: QUAD_TREE }

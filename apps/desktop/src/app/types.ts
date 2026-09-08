@@ -173,6 +173,13 @@ export interface SidebarNavItem {
   action?: 'new-session'
   /** Keybind action id — when set, the tooltip shows the keybind hint. */
   keybindActionId?: string
+  /** Contributed rows only: one-shot attention cue for something that just
+   *  LANDED (the onboarding build's "it's here now" arrow). The renderer
+   *  strips it on first view. */
+  isNew?: boolean
+  /** Contributed rows whose click is an ACTION, not a navigation (first
+   *  screen reveals its own pane; nothing to route to). */
+  onClick?: () => void
 }
 
 export interface PersistedDisplayTranscriptProvenance {

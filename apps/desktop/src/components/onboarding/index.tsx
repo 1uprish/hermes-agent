@@ -15,6 +15,8 @@ import { $desktopBoot, type DesktopBootState } from '@/store/boot'
 import { FREE_TIER_MODEL } from '@/store/free-tier'
 import { openFreeTierSignIn } from '@/store/free-tier-sign-in'
 import { $localModelsEnabled } from '@/store/local-models-flag'
+import { $instantAccount, instantSuppressesOnboarding } from '@/store/instant-account'
+import { $introReveal, shouldPlayFirstRunIntro } from '@/store/intro-reveal'
 import {
   $desktopOnboarding,
   ackFreeTierIntro,
@@ -33,6 +35,8 @@ import {
   startManualOnboarding,
   startProviderOAuth
 } from '@/store/onboarding'
+import { onboardingSurfaceActive } from '@/store/onboarding-presence'
+import { $onboardingWizard, shouldResumeOnboardingWizard } from '@/store/onboarding-wizard'
 import type { ModelOptionProvider, OAuthProvider } from '@/types/hermes'
 
 import { DocsLink, FlowPanel, Status } from './flow'
@@ -198,6 +202,9 @@ export function DesktopOnboardingOverlay({
   const { t } = useI18n()
   const onboarding = useStore($desktopOnboarding)
   const boot = useStore($desktopBoot)
+  const instantAccount = useStore($instantAccount)
+  const introReveal = useStore($introReveal)
+  const wizard = useStore($onboardingWizard)
   const ctxRef = useRef<OnboardingContext>({ requestGateway, onCompleted, profile })
   ctxRef.current = { requestGateway, onCompleted, profile }
 
@@ -311,10 +318,37 @@ export function DesktopOnboardingOverlay({
     return null
   }
 
+  // The instant-account path owns first-run while it's minting or ready: the
+  // composer is the first screen and the mint races the first keystroke in
+  // the background. Only 'failed'/'off' fall through to this overlay — the
+  // ladder's honest fallback, rendered exactly as if instant never existed.
+  // Manual mode still wins: Settings → Providers must always open.
+  if (instantSuppressesOnboarding(instantAccount.status) && !onboarding.manual) {
+    return null
+  }
+
   // The user chose "I'll choose a provider later" on first run. Stay out of the
   // way on every subsequent launch — they re-enter via Settings → Providers
   // (manual mode), which sets manual=true and bypasses this gate.
   if (onboarding.firstRunSkipped && !onboarding.manual && !onboarding.freeTierReady) {
+    return null
+  }
+
+  // The cinematic + wizard own first run while the intro-reveal build flag is
+  // on: this classic overlay is demoted to manual-only for the whole window
+  // between "intro should play" and "wizard finished". The wizard's provider
+  // step re-enters through startManualOnboarding (manual=true, wins above).
+  // The guided solo chat counts too (onboardingSurfaceActive): the handoff
+  // wizard→chat must never open a gap this overlay can pop through with a
+  // SECOND sign-in card.
+  if (
+    !onboarding.manual &&
+    (introReveal.phase !== 'hidden' ||
+      wizard.phase === 'active' ||
+      onboardingSurfaceActive() ||
+      shouldPlayFirstRunIntro(onboarding.configured, onboarding.firstRunSkipped) ||
+      shouldResumeOnboardingWizard())
+  ) {
     return null
   }
 
@@ -753,13 +787,6 @@ export function ApiKeyForm({
 
   return (
     <div className="grid gap-4">
-      {canGoBack ? (
-        <Button className="-mt-1 self-start font-medium" onClick={onBack} size="xs" type="button" variant="text">
-          <ChevronLeft className="size-3" />
-          {t.onboarding.backToSignIn}
-        </Button>
-      ) : null}
-
       <div className="grid max-h-[42dvh] gap-2 overflow-y-auto p-1 sm:grid-cols-2">
         {options.map(o => (
           <button
@@ -815,7 +842,13 @@ export function ApiKeyForm({
       </div>
 
       <div className="flex items-center justify-between gap-3">
-        <div>
+        <div className="flex items-center gap-2">
+          {canGoBack ? (
+            <Button className="font-medium" onClick={onBack} size="xs" type="button" variant="text">
+              <ChevronLeft className="size-3" />
+              {t.onboarding.backToSignIn}
+            </Button>
+          ) : null}
           {alreadySet && onClear ? (
             <Button onClick={() => onClear(option.envKey)} size="sm" variant="ghost">
               {t.common.remove}

@@ -21,9 +21,11 @@
 import { atom, computed, type ReadableAtom } from 'nanostores'
 import type { ReactNode } from 'react'
 
+import { requestComposerSubmit } from '@/app/chat/composer/focus'
 import { PRIMARY_SESSION_VIEW } from '@/app/chat/session-view'
 import { openSession, type OpenSessionIntent } from '@/app/open-session'
 import type { ClientSessionState } from '@/app/types'
+import { rememberOnboardingRunSubmit } from '@/components/onboarding-chat/retry'
 import {
   $narrowViewport,
   $newSessionTabAction,
@@ -1234,6 +1236,36 @@ export const host = {
    *  safe to call in render. Feature-detect on older desktops
    *  (`typeof host.paneVisibility === 'function'`). */
   paneVisibility: (paneId: string): ReadableAtom<boolean> => $paneVisible(paneId),
+
+  /** Bring a contributed pane on screen — dismisses its hidden state and
+   *  reveals its zone. The narrowest "show me" verb a plugin's own nav row
+   *  or action button should use (the first-screen sidebar entry and the
+   *  finish card in onboarding both call it on their pane id). */
+  revealPane: (paneId: string): void => {
+    const id = (paneId ?? '').trim()
+
+    if (!id) {
+      return
+    }
+
+    revealTreePane(id)
+  },
+
+  /** Submit a prompt through the ACTIVE chat composer, as if typed and sent.
+   *  The plugin-safe way for a pane's action button to make the conversation
+   *  do something (the first-screen Run buttons). `hidden` submits without a
+   *  user bubble — the reply streams in as if Hermes volunteered it. Returns
+   *  false when no composer surface is visible to claim the submit. During
+   *  guided onboarding the submit is remembered for the quiet single retry. */
+  submitPrompt: (text: string, options: { hidden?: boolean } = {}): boolean => {
+    const sent = requestComposerSubmit(text, options.hidden ? { displayKind: 'hidden' } : {})
+
+    if (sent) {
+      rememberOnboardingRunSubmit(text)
+    }
+
+    return sent
+  },
 
   /** HEAR the gateway stream (message deltas, session lifecycle, tool
    *  activity, …) by event type — `'*'` for everything. Returns a disposer.

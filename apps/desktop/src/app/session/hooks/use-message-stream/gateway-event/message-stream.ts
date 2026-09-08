@@ -12,6 +12,7 @@ import { setSessionCompacting } from '@/store/compaction'
 import { notify } from '@/store/notifications'
 import { flashPetActivity, markPetUnread, setPetActivity } from '@/store/pet'
 import { clearAllPrompts } from '@/store/prompts'
+import { reportGuestTurnComplete } from '@/store/suggestion-providers/guest-claim'
 import { providerWaitText, setSessionProviderWait } from '@/store/provider-wait'
 import { setCurrentUsage, setTurnStartedAt } from '@/store/session'
 import { pruneFinishedSessionSubagents } from '@/store/subagents'
@@ -321,6 +322,9 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
     // session so a background turn finishing can't wipe the active chat's
     // prompt, and vice versa.
     clearAllPrompts(sessionId)
+    // Guest-claim invitation counts completed turns; it offers its pill
+    // after the second good one (and is a no-op on non-guest installs).
+    reportGuestTurnComplete(sessionId)
     clearClarifyRequest(undefined, sessionId)
     // Turn ended without a final `todo` update — drop a still-unfinished
     // list so "Tasks N/M" doesn't stay pinned above the composer with the

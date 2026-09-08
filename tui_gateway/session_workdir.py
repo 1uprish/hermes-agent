@@ -305,11 +305,15 @@ _WORKDIR_SEED_FIELDS = (
 
 
 def _persist_branch_seed(session: dict) -> None:
-    """First-turn persist of a branch's copied transcript. A branch is a draft until its first submit: the parent's
-    messages live only in ``session["history"]`` (ridden into the agent as ``conversation_history``, which
-    ``_flush_messages_to_session_db`` skips by identity), so the row would otherwise resume missing its pre-branch
-    context. Runs once, after ``_ensure_session_db_row`` wrote the row + parent link."""
-    if not (key := session.get("session_key")) or not session.get("parent_session_id") or session.get("_branch_seed_persisted"):
+    """First-turn persist of a session's seeded transcript. Two shapes share this path: a BRANCH (the parent's
+    copied messages) and a SEEDED CREATE (session.create ``messages`` — the guided onboarding's runbook +
+    pre-written greeting, ``_seeded_create``). Either way the rows live only in ``session["history"]`` (ridden
+    into the agent as ``conversation_history``, which ``_flush_messages_to_session_db`` skips by identity), so
+    the row would otherwise resume missing that context. Runs once, after ``_ensure_session_db_row`` wrote the
+    row (+ parent link, when a branch)."""
+    if not (key := session.get("session_key")) or session.get("_branch_seed_persisted"):
+        return
+    if not session.get("parent_session_id") and not session.get("_seeded_create"):
         return
     with session["history_lock"]:
         seed = [dict(msg) for msg in (session.get("history") or [])]

@@ -136,6 +136,7 @@ import type { ClientSessionState, SidebarNavItem } from '../../../types'
 import { sessionContextDrift } from '../session-context-drift'
 import { singleFlightSessionResume } from '../use-prompt-actions/single-flight-resume'
 
+import { applySessionCreateOverrides, type SessionCreateOverrides } from './create-overrides'
 import { pendingClarifyToolPayload, restorePendingClarifyFromSnapshot } from './restore-pending-clarify'
 import {
   createPersistedDisplayTranscriptProvenance,
@@ -530,7 +531,15 @@ export function useSessionActions({
   )
 
   const createBackendSessionForSend = useCallback(
-    async (preview: string | null = null): Promise<string | null> => {
+    async (
+      preview: string | null = null,
+      seedMessages?: { content: string; display_kind?: 'hidden'; role: 'assistant' | 'user' }[],
+      // Bot-mode onboarding: mint the session as a titled/hidden canonical
+      // chat (e.g. "Bot Chat"). The owning profile is NOT an override — point
+      // $newChatProfile at it first (selectProfile-style) so the create lands
+      // on that profile's own backend and every later ambient RPC follows.
+      createOverrides?: SessionCreateOverrides
+    ): Promise<string | null> => {
       const startingStoredSessionId = selectedStoredSessionIdRef.current
       const startingRouteToken = getRouteToken()
 
@@ -560,7 +569,14 @@ export function useSessionActions({
         // reduce the owner to a bare profile name that later RPCs dial on a
         // different socket than the one that minted the runtime.
         const capturedRoute = resolveNewChatOwnerRoute()
-        const params = await desktopSessionCreateParams(cwd, capturedRoute)
+        const params = applySessionCreateOverrides(await desktopSessionCreateParams(cwd, capturedRoute), createOverrides)
+
+        // Seed history (the guided onboarding's runbook + pre-written
+        // greeting) rides session.create so the rows exist server-side from
+        // the session's first instant — no generation, no prompt round-trip.
+        if (seedMessages?.length) {
+          params.messages = seedMessages
+        }
 
         // Lease the owner socket for the whole create → owner-publication
         // sequence (#93602 primitive). The per-request lease inside

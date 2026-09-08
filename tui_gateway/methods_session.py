@@ -317,6 +317,9 @@ def _(rid, params: dict) -> dict:
             "cols": int(params.get("cols", 80)), "created_at": now, "edit_snapshots": {},
             "explicit_cwd": explicit_cwd,
             "history": history, "history_lock": threading.Lock(), "history_version": 0, "image_counter": 0,
+            # Seeded create (the guided onboarding's runbook + pre-written greeting): the first submit
+            # persists these rows to the durable transcript exactly like a branch seed.
+            "_seeded_create": bool(history) and not parent_session_id,
             "cwd": _completion_cwd(params), "inflight_turn": None, "last_active": now,
             "model_override": session_model_override,
             "create_reasoning_override": create_reasoning_override,
@@ -347,6 +350,16 @@ def _(rid, params: dict) -> dict:
     # Return immediately so Ink can paint; the AIAgent builds right after the flush.
     _schedule_agent_build(sid)
     _schedule_session_cap_enforcement()  # trim detached idle sessions over the cap
+    # A SEEDED create without a parent (session.create ``messages`` — the guided onboarding's runbook +
+    # pre-written greeting) is real content, not an empty draft: persist it NOW so any hydration (route
+    # change, reconnect, relaunch) returns these rows instead of an empty transcript that clobbers the
+    # client's optimistic paint.
+    if history and not parent_session_id:
+        try:
+            _ensure_session_db_row(_sessions[sid])
+            _persist_branch_seed(_sessions[sid])
+        except Exception:
+            logger.warning("session.create: seed history persist failed", exc_info=True)
     cwd = _sessions[sid]["cwd"]
     override = session_model_override or {}
     return _ok(rid, {

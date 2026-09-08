@@ -12,6 +12,7 @@
 import { useStore } from '@nanostores/react'
 import { type CSSProperties, Fragment, type ReactNode, type RefObject, useEffect, useRef, useState } from 'react'
 
+import { paneEntranceStyle } from '@/components/onboarding-chat/assembly'
 import { ActionsContextMenu, type MenuKit, renderActionItem } from '@/components/ui/actions-menu'
 import { Codicon } from '@/components/ui/codicon'
 import { DecodeText } from '@/components/ui/decode-text'
@@ -239,6 +240,10 @@ export function TreeGroup({
   // missing on an inactive tile tab whose zone-active was the uncloseable
   // workspace).
   const [menuPane, setMenuPane] = useState<string | undefined>(undefined)
+  // In-chat onboarding "lego" assembly: zones born right after a layout
+  // assemble snap in staggered. A birth property, read once at mount — inert
+  // (undefined) outside that window, including for the chat zone itself.
+  const [entrance] = useState(() => paneEntranceStyle(node.panes))
   const panes = useContributions('panes')
   // Coarse drag flag only (set once at drag start/end). The per-frame drop
   // HINT lives in ZoneDropOverlay so a moving pointer re-renders the tiny
@@ -431,7 +436,7 @@ export function TreeGroup({
         setMenuPane((e.target as HTMLElement).closest('[data-tree-tab]')?.getAttribute('data-tree-tab') ?? undefined)
       }}
       ref={ref}
-      style={wcOverlap ? { paddingTop: wcOverlap.y + wcOverlap.height } : undefined}
+      style={{ ...(wcOverlap ? { paddingTop: wcOverlap.y + wcOverlap.height } : undefined), ...entrance }}
     >
       {wcOverlap && (
         <div

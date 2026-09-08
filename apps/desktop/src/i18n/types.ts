@@ -2255,6 +2255,14 @@ export interface Translations {
       done: string
       doneTip: string
     }
+    guestClaim: {
+      label: string
+      tip: string
+      working: string
+      workingTip: string
+      done: string
+      doneTip: string
+    }
   }
 
   statusStack: {
@@ -2382,6 +2390,14 @@ export interface Translations {
     }
   }
 
+  introReveal: {
+    presents: string
+    replay: string
+    replayDesc: string
+    skip: string
+    tagline: string
+    wordmark: string
+  }
   install: {
     stageStates: Record<string, string>
     oneTimeTitle: string
@@ -2629,6 +2645,20 @@ export interface Translations {
       smartDescription: string
       off: string
       offDescription: string
+    }
+    guestAccount: {
+      title: string
+      chipLabel: string
+      chipTip: string
+      description: string
+      modelLabel: string
+      creditsLabel: string
+      historyNote: string
+      claimAction: string
+      claiming: string
+      claimedTitle: string
+      claimedMessage: string
+      claimFailed: string
     }
     statusbar: {
       unknown: string

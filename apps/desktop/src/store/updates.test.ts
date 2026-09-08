@@ -174,6 +174,24 @@ describe('maybeNotifyUpdateAvailable', () => {
     expect(notifySpy).not.toHaveBeenCalled()
   })
 
+  it('stays quiet while an onboarding surface owns the screen', async () => {
+    const { resetOnboardingPresenceForTests, setOnboardingSurfaceActive } = await import('./onboarding-presence')
+
+    setOnboardingSurfaceActive('intro', true)
+    maybeNotifyUpdateAvailable(status())
+    expect(notifySpy).not.toHaveBeenCalled()
+
+    // Chain handoff: cinematic down, login card up — still quiet.
+    setOnboardingSurfaceActive('intro', false)
+    setOnboardingSurfaceActive('wizard', true)
+    maybeNotifyUpdateAvailable(status())
+    expect(notifySpy).not.toHaveBeenCalled()
+
+    resetOnboardingPresenceForTests()
+    maybeNotifyUpdateAvailable(status())
+    expect(notifySpy).toHaveBeenCalledTimes(1)
+  })
+
   // FAIL-BEFORE: a shallow installer clone reports behind:null + updateAvailable
   // (exact count unknowable without a merge-base). The guard treated null as 0
   // and silently swallowed the notification entirely.

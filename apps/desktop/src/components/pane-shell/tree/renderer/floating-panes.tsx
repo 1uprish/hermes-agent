@@ -13,6 +13,7 @@ import { type PointerEvent as ReactPointerEvent, useCallback, useEffect, useRef,
 
 import { HUD_SURFACE } from '@/app/floating-hud'
 import { TITLEBAR_HEIGHT } from '@/app/shell/titlebar'
+import { useOnboardingChatActive } from '@/components/onboarding-chat/active'
 import { Codicon } from '@/components/ui/codicon'
 import { ContribBoundary, ContribRender } from '@/contrib/react/boundary'
 import { useContributions } from '@/contrib/react/use-contributions'
@@ -189,8 +190,15 @@ function FloatingPane({ pane }: { pane: Contribution }) {
 export function FloatingPanes() {
   const panes = useContributions('panes')
   const hidden = useStore($hiddenTreePanes)
+  // The first-run story is a bare conversation: user/plugin panels must not
+  // float over it — not during the solo phase, and not over the guided or
+  // first-build threads after the app assembles. They're back the moment the
+  // user is in any other session.
+  const onboardingActive = useOnboardingChatActive()
 
-  const floating = panes.filter(pane => paneChrome(pane).placement === FLOATING_PLACEMENT && !hidden.has(pane.id))
+  const floating = onboardingActive
+    ? []
+    : panes.filter(pane => paneChrome(pane).placement === FLOATING_PLACEMENT && !hidden.has(pane.id))
 
   if (floating.length === 0) {
     return null

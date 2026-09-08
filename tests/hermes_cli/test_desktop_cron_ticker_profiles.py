@@ -6,6 +6,13 @@ that profile's cron jobs silently stop firing until the user next opens the
 profile. The PRIMARY desktop backend outlives the pool, so its ticker must own
 every profile's store — the desktop sibling of the multiplex-gateway fix for
 #69377.
+
+What it hands the scheduler is a LIVE view rather than a list, because desktop
+bots are profiles the app mints while it is running: onboarding creates the
+setup bot and then a task bot mid-session, and each schedules its own check-ins
+into a home that did not exist when a startup snapshot would have been taken.
+So these assert which homes a tick SEES, at the moment it looks — never the
+shape of the argument that carries them.
 """
 
 from pathlib import Path
@@ -53,7 +60,7 @@ def _providers(monkeypatch):
     return sp, builtin
 
 
-def test_multi_profile_homes_passed_to_builtin(monkeypatch, _providers, tmp_path):
+def test_every_profile_home_is_ticked(monkeypatch, _providers, tmp_path):
     _sp, builtin = _providers
     homes = [
         ("default", tmp_path / "root"),
@@ -65,24 +72,26 @@ def test_multi_profile_homes_passed_to_builtin(monkeypatch, _providers, tmp_path
 
     ws._start_desktop_cron_ticker(threading.Event(), interval=7)
 
-    assert builtin.start_kwargs is not None
     assert builtin.start_kwargs["interval"] == 7
-    assert builtin.start_kwargs["profile_homes"] == homes
+    assert list(builtin.start_kwargs["profile_homes"]) == homes
 
 
-def test_single_profile_keeps_legacy_path(monkeypatch, _providers, tmp_path):
+def test_a_profile_minted_after_start_is_ticked(monkeypatch, _providers, tmp_path):
+    """The reason the view is live: onboarding mints its bots mid-session.
+
+    A snapshot taken when the backend booted would never tick the setup bot's
+    check-in, because the setup bot did not exist yet.
+    """
     _sp, builtin = _providers
     import hermes_cli.profiles as profiles_mod
 
-    monkeypatch.setattr(
-        profiles_mod,
-        "profiles_to_serve",
-        lambda **_kw: [("default", tmp_path / "root")],
-    )
+    homes = [("default", tmp_path / "root")]
+    monkeypatch.setattr(profiles_mod, "profiles_to_serve", lambda **_kw: list(homes))
 
-    ws._start_desktop_cron_ticker(threading.Event(), interval=9)
+    ws._start_desktop_cron_ticker(threading.Event(), interval=7)
+    homes.append(("hermes-setup", tmp_path / "profiles" / "hermes-setup"))
 
-    assert builtin.start_kwargs == {"interval": 9}
+    assert [name for name, _home in builtin.start_kwargs["profile_homes"]] == ["default", "hermes-setup"]
 
 
 def test_enumeration_failure_fails_open(monkeypatch, _providers):
@@ -97,7 +106,8 @@ def test_enumeration_failure_fails_open(monkeypatch, _providers):
 
     ws._start_desktop_cron_ticker(threading.Event(), interval=11)
 
-    assert builtin.start_kwargs == {"interval": 11}
+    assert builtin.start_kwargs["interval"] == 11
+    assert [name for name, _home in builtin.start_kwargs["profile_homes"]] == ["default"]
 
 
 def test_external_provider_never_gets_profile_homes(monkeypatch, tmp_path):

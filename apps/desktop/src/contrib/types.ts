@@ -39,6 +39,10 @@ export interface Contribution {
    *  external state won't re-resolve on its own; trigger a registry mutation
    *  (or don't rely on it flipping without one). */
   when?: () => boolean
+  /** Transient "this just happened" cue for consumers that badge or arrow
+   *  a row — cleared by the consumer on first view (sidebar nav rows only
+   *  today). Not reactively re-evaluated: set at register time. */
+  isNew?: boolean
   /** Soft disable without unregistering. `false` hides it. */
   enabled?: boolean
   /** Renders the contribution's content (UI contributions). */

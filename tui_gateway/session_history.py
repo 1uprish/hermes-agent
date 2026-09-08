@@ -240,8 +240,14 @@ def _coerce_seed_history(value: Any) -> list[dict]:
         if not isinstance(item, dict) or item.get("role") not in ("user", "assistant", "system"):
             continue
         content = item.get("text") if item.get("content") is None else item.get("content")
-        if isinstance(content, str) and content.strip():
-            history.append({"role": item["role"], "content": content})
+        if not isinstance(content, str) or not content.strip():
+            continue
+        row = {"role": item["role"], "content": content}
+        # Same whitelist as prompt.submit: a seed row may be model-visible but hidden from clients (the
+        # guided onboarding seeds its instruction prompt this way, ahead of a pre-written assistant greeting).
+        if item.get("display_kind") == "hidden":
+            row["display_kind"] = "hidden"
+        history.append(row)
     return history
 
 

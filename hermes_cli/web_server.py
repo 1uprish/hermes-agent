@@ -74,6 +74,32 @@ from hermes_cli.web_server_lifecycle import (  # noqa: E402
 )
 
 
+class _LiveProfileHomes:
+    """A ``profile_homes`` iterable that re-enumerates on every iteration.
+
+    The multiplex scheduler walks ``profile_homes`` afresh each tick cycle, so handing it a live view
+    (instead of a snapshot taken at backend start) means profiles created while the app runs — bot-mode
+    agents, the onboarding's setup bot and its task bot — get their cron stores ticked without a restart.
+    Fails open to the active profile on its own.
+    """
+
+    def _snapshot(self):
+        from hermes_cli import profiles as profiles_mod
+
+        try:
+            return list(profiles_mod.profiles_to_serve(multiplex=True))
+        except Exception:
+            from hermes_constants import get_hermes_home
+
+            return [("default", get_hermes_home())]
+
+    def __iter__(self):
+        return iter(self._snapshot())
+
+    def __len__(self):
+        return len(self._snapshot())
+
+
 def _start_desktop_cron_ticker(stop_event: "threading.Event", interval: int = 60) -> None:
     """Tick the cron scheduler from inside the desktop dashboard backend.
 
@@ -96,31 +122,27 @@ def _start_desktop_cron_ticker(stop_event: "threading.Event", interval: int = 60
 
     start_kwargs: dict = {"interval": interval}
     if isinstance(provider, InProcessCronScheduler):
+        # LIVE enumeration (see _LiveProfileHomes): desktop bots are profiles the app mints while it
+        # runs, each scheduling its own check-ins into a HERMES_HOME that did not exist at startup.
+        profile_homes = _LiveProfileHomes()
+        start_kwargs["profile_homes"] = profile_homes
+        # Stand down, per tick, for a profile whose OWN gateway runs: it ticks with live adapters, and
+        # the tick-lock race would otherwise deliver through the standalone path (#100489).
+        from hermes_cli.profiles import _check_gateway_running
+
+        start_kwargs["profile_gate"] = lambda _name, home: not _check_gateway_running(Path(home))
         try:
-            from hermes_cli.profiles import profiles_to_serve
+            from hermes_logging import enable_profile_log_routing
 
-            profile_homes = list(profiles_to_serve(multiplex=True))
-            if len(profile_homes) > 1:
-                start_kwargs["profile_homes"] = profile_homes
-                # Stand down, per tick, for a profile whose OWN gateway runs:
-                # it ticks with live adapters, and the tick-lock race would
-                # otherwise deliver through the standalone path (#100489).
-                from hermes_cli.profiles import _check_gateway_running
-
-                start_kwargs["profile_gate"] = lambda _name, home: not _check_gateway_running(Path(home))
-                from hermes_logging import enable_profile_log_routing
-
-                enable_profile_log_routing(profile_homes)
-                _log.info(
-                    "Desktop cron scheduler will tick %d profile(s): %s",
-                    len(profile_homes),
-                    [name for name, _home in profile_homes],
-                )
+            enable_profile_log_routing(list(profile_homes))
         except Exception:
-            # Fail open to the single-store ticker so the active profile keeps firing.
-            _log.exception("Desktop cron: profile enumeration failed; ticking active profile only")
+            _log.exception("Desktop cron: profile log routing setup failed; ticking without it")
 
-    _log.info("Desktop cron scheduler started (provider=%s, interval=%ds)", provider.name, interval)
+    _log.info(
+        "Desktop cron scheduler started (provider=%s, interval=%ds, profiles=%s)",
+        provider.name, interval,
+        [name for name, _home in start_kwargs.get("profile_homes", ())] or "active only",
+    )
     provider.start(stop_event, **start_kwargs)
 
 

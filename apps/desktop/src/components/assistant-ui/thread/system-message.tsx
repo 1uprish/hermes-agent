@@ -6,6 +6,7 @@ import { MessageTimelineTimestamp } from '@/components/assistant-ui/thread/timel
 import { SCAFFOLD_LABEL_CLASS } from '@/components/chat/scaffold-row'
 import { Codicon } from '@/components/ui/codicon'
 import { ToolIcon } from '@/components/ui/tool-icon'
+import { Tip } from '@/components/ui/tooltip'
 import { LinkifiedText } from '@/lib/external-link'
 import { cn } from '@/lib/utils'
 
@@ -24,6 +25,9 @@ export const SystemMessage: FC = () => {
   // kind of event as a landed `memory` write, so it wears the same chrome:
   // brain glyph with the gold→purple glow, gradient label, purple detail,
   // left-aligned in the reading column like every other scaffold line.
+  // The label alone means nothing to a new user, so the row explains itself
+  // on hover: this is Hermes learning from the session, automatic, theirs
+  // to inspect.
   const reviewNote = text.match(REVIEW_NOTE_RE)
 
   if (reviewNote?.groups) {
@@ -35,12 +39,16 @@ export const SystemMessage: FC = () => {
         data-role="system"
         data-slot="aui_system-message-root"
       >
-        <span className="tool-memory-legendary-glyph flex h-(--conversation-line-height) w-3.5 shrink-0 items-center justify-center">
-          <ToolIcon className="text-(--tool-memory-legendary-icon)" name="brain" size="0.875rem" />
-        </span>
-        <span className={cn(SCAFFOLD_LABEL_CLASS, 'tool-memory-legendary-title shrink-0 text-transparent')}>
-          {reviewNote.groups.label.trim()}
-        </span>
+        <Tip label="Hermes quietly reviews each session as you work and saves what's worth keeping — preferences to memory, working procedures to skills. This line is what it just learned; everything it saves is yours to read and edit.">
+          <span className="flex min-w-0 items-start gap-1.5">
+            <span className="tool-memory-legendary-glyph flex h-(--conversation-line-height) w-3.5 shrink-0 items-center justify-center">
+              <ToolIcon className="text-(--tool-memory-legendary-icon)" name="brain" size="0.875rem" />
+            </span>
+            <span className={cn(SCAFFOLD_LABEL_CLASS, 'tool-memory-legendary-title shrink-0 text-transparent')}>
+              {reviewNote.groups.label.trim()}
+            </span>
+          </span>
+        </Tip>
         {detail && (
           <span className={cn(SCAFFOLD_LABEL_CLASS, 'tool-memory-legendary-meta min-w-0 wrap-anywhere')}>{detail}</span>
         )}

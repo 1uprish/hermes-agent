@@ -7,6 +7,7 @@ import type { CommandCenterSection } from '@/app/command-center'
 import { useApprovalModeStatusbarItem } from '@/app/shell/approval-mode-menu'
 import { ContextUsagePanel } from '@/app/shell/context-usage-panel'
 import { GatewayMenuPanel } from '@/app/shell/gateway-menu-panel'
+import { GuestAccountPanel } from '@/app/shell/guest-account-panel'
 import { useContextBreakdown } from '@/app/shell/hooks/use-context-breakdown'
 import { useSystemResourcesStatusbarItem } from '@/app/shell/system-resources-statusbar'
 import { $paneVisible, togglePaneVisible } from '@/components/pane-shell/tree/store'
@@ -36,6 +37,7 @@ import { resolveVersionStatus } from '@/lib/version-status'
 import { copyFilePath, revealFile } from '@/store/file-actions'
 import { $freeTierStatus, FREE_TIER_MODEL } from '@/store/free-tier'
 import { openFreeTierSignIn } from '@/store/free-tier-sign-in'
+import { $instantAccount, isGuestChipVisible } from '@/store/instant-account'
 import { revealFileInTree } from '@/store/layout'
 import { $activeGatewayProfile } from '@/store/profile'
 import { $projectTree, projectNameForCwd } from '@/store/projects'
@@ -104,6 +106,7 @@ export function useStatusbarItems({
   const { t } = useI18n()
   const copy = t.shell.statusbar
   const freeTierCopy = t.freeTier
+  const guestCopy = t.shell.guestAccount
   const fileMenu = t.fileMenu
   const primaryActiveSessionId = useStore($activeSessionId)
   const activeGatewayProfile = useStore($activeGatewayProfile)
@@ -141,6 +144,7 @@ export function useStatusbarItems({
   const freeTier = useStore($freeTierStatus)
   const updateStatus = useStore($updateStatus)
   const updateApply = useStore($updateApply)
+  const instantAccount = useStore($instantAccount)
   const backendUpdateStatus = useStore($backendUpdateStatus)
   const backendUpdateApply = useStore($backendUpdateApply)
   const desktopVersion = useStore($desktopVersion)
@@ -417,8 +421,29 @@ export function useStatusbarItems({
     copy
   ])
 
+  // The unclaimed guest account's one piece of ambient chrome: a small, true
+  // label on the corner of the deal. Click → popover with the honest facts +
+  // the claim button; claimed or non-guest installs never see it.
+  const guestItem = useMemo<StatusbarItem | null>(() => {
+    if (!isGuestChipVisible(instantAccount.status)) {
+      return null
+    }
+
+    return {
+      icon: <Codicon name="account" size="0.75rem" />,
+      id: 'guest-account',
+      label: guestCopy.chipLabel,
+      menuClassName: 'w-72',
+      menuContent: close => <GuestAccountPanel onClose={close} />,
+      title: guestCopy.chipTip,
+      toggleLabel: guestCopy.chipLabel,
+      variant: 'menu'
+    }
+  }, [guestCopy, instantAccount.status])
+
   const coreLeftStatusbarItems = useMemo<readonly StatusbarItem[]>(
     () => [
+      ...(guestItem ? [guestItem] : []),
       {
         className: `w-7 justify-center px-0${commandCenterOpen ? ' bg-accent/55 text-foreground' : ''}`,
         icon: <Command className="size-3.5" />,
@@ -567,6 +592,7 @@ export function useStatusbarItems({
       gatewayClassName,
       gatewayDetail,
       gatewayRestarting,
+      guestItem,
       inferenceReady,
       inferenceStatus?.reason,
       openAgents,

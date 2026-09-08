@@ -115,8 +115,12 @@ export interface SidebarNavContribution {
   /** Codicon name, e.g. `'project'`. */
   codicon: string
   label: string
-  /** Route to navigate to (usually a contributed page's path). */
-  path: string
+  /** Route to navigate to (usually a contributed page's path). Mutually
+   *  exclusive with `onClick` — a row either navigates or acts. */
+  path?: string
+  /** Click handler for a row that ACTS (no route): reveal a pane, open a
+   *  modal. The sidebar maps this onto the row's button. */
+  onClick?: () => void
 }
 
 // Views that render as a full-screen modal card (OverlayView) over the shell.

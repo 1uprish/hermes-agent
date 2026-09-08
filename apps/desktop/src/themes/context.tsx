@@ -10,7 +10,7 @@
  */
 
 import { useStore } from '@nanostores/react'
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 
 import { $registryVersion } from '@/contrib/registry'
 import { matchesQuery, useMediaQuery } from '@/hooks/use-media-query'
@@ -372,7 +372,21 @@ const ThemeContext = createContext<ThemeContextValue>({
   clearThemePreview: () => {}
 })
 
-export function ThemeProvider({ children }: { children: ReactNode }) {
+export function ThemeProvider({
+  children,
+  initialSkin
+}: {
+  children: ReactNode
+  /**
+   * Seed the skin instead of resolving the profile's persisted pick, and pin
+   * it against the persisted-pref syncs (profile switch, storage events) for
+   * the provider's lifetime. A live `setTheme` still wins — it sets state
+   * directly and persists as usual. Mode is untouched (system light/dark
+   * keeps tracking). Used by the onboarding-wizard window, which must paint
+   * the default look regardless of what a previous run left in storage.
+   */
+  initialSkin?: string
+}) {
   // Skin + mode are assigned per profile; the active profile drives which
   // appearance shows. Single-profile users only ever see "default", so their
   // behavior is unchanged.
@@ -397,9 +411,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     [userThemes, backendThemes, registryVersion]
   )
 
-  const [themeName, setThemeNameState] = useState(() =>
-    typeof window === 'undefined' ? DEFAULT_SKIN_NAME : storedSkin(readBootProfileKey())
-  )
+  const skinPinned = initialSkin !== undefined
+
+  const [themeName, setThemeNameState] = useState(() => {
+    if (initialSkin !== undefined) {
+      return normalizeSkin(initialSkin)
+    }
+
+    return typeof window === 'undefined' ? DEFAULT_SKIN_NAME : storedSkin(readBootProfileKey())
+  })
 
   const [mode, setModeState] = useState<ThemeMode>(() =>
     typeof window === 'undefined' ? 'system' : modePref.resolve(readBootProfileKey())
@@ -409,9 +429,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // remember it for the next boot's first paint.
   useEffect(() => {
     rememberActiveProfileKey(profileKey)
-    setThemeNameState(storedSkin(profileKey))
+
+    if (!skinPinned) {
+      setThemeNameState(storedSkin(profileKey))
+    }
+
     setModeState(modePref.resolve(profileKey))
-  }, [profileKey])
+  }, [profileKey, skinPinned])
 
   // Appearance is per-profile localStorage, and every desktop window is another
   // renderer on the same origin — so a switch made in the HUD (or any peer
@@ -425,14 +449,17 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
       const live = normalizeProfileKey($activeGatewayProfile.get())
 
-      setThemeNameState(storedSkin(live))
+      if (!skinPinned) {
+        setThemeNameState(storedSkin(live))
+      }
+
       setModeState(modePref.resolve(live))
     }
 
     window.addEventListener('storage', onStorage)
 
     return () => window.removeEventListener('storage', onStorage)
-  }, [])
+  }, [skinPinned])
 
   const systemDark = useMediaQuery('(prefers-color-scheme: dark)')
   const resolvedMode = resolveMode(mode, systemDark)
@@ -476,7 +503,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // What actually gets painted (matches the `.dark` class applyTheme toggles).
   const renderedMode = useMemo(() => renderedModeFor(paintedTheme.colors, paintedMode), [paintedTheme, paintedMode])
 
-  useEffect(() => applyTheme(paintedTheme, paintedMode), [paintedTheme, paintedMode])
+  // Layout effect, not effect: the CSS variables must land in the SAME paint
+  // as the render that triggered them. With a plain effect there's one visible
+  // frame where components that read theme state (accent retint, mode) have
+  // re-rendered against the old variables — a flash on every swatch click.
+  useLayoutEffect(() => applyTheme(paintedTheme, paintedMode), [paintedTheme, paintedMode])
 
   // Keep the native window appearance pinned to the app theme (vibrancy
   // material, titlebar, new-window pre-paint background).

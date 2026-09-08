@@ -41,7 +41,7 @@ import { ArtifactCard } from './artifact-card'
 import { SessionRefLink } from './directive-text'
 import { detectEmbed, extractAlert, MarkdownAlert, RichCodeBlock, UrlEmbed } from './embeds'
 import { ResizableMarkdownTable, ResizableMarkdownTh } from './markdown-table'
-import { paragraphPlainText, TranscriptDirectiveLeaf, useIsClaimedDirective } from './transcript-directive'
+import { paragraphPlainText, TranscriptDirectiveLeaf, useResolvedParagraph } from './transcript-directive'
 
 // Math rendering plugin (KaTeX). Configured once at module scope — the
 // plugin is stateless beyond its internal cache so re-creating per-render
@@ -517,17 +517,32 @@ function MarkdownParagraph({
   ...props
 }: ComponentProps<'p'> & { streaming?: boolean }) {
   const plain = paragraphPlainText(children)
-  const claimed = useIsClaimedDirective(plain)
+  const resolved = useResolvedParagraph(plain)
 
-  if (claimed && plain !== null) {
-    return <TranscriptDirectiveLeaf streaming={streaming} text={plain} />
+  // Vertical rhythm is owned by styles.css (`--paragraph-gap`), which must
+  // out-specify Tailwind Typography's `prose` margins — so no `my-*` here.
+  const paragraphClass = cn('wrap-anywhere leading-(--dt-line-height)', className)
+
+  // A paragraph that is one directive renders as the card alone; one that
+  // ends in a directive renders as its sentence followed by the card.
+  if (resolved) {
+    return (
+      <>
+        {resolved.map((segment, index) =>
+          segment.kind === 'directive' ? (
+            <TranscriptDirectiveLeaf key={index} streaming={streaming} text={segment.source} />
+          ) : (
+            <p className={paragraphClass} key={index} {...props}>
+              {segment.text.trim()}
+            </p>
+          )
+        )}
+      </>
+    )
   }
 
   return (
-    // Vertical rhythm is owned by styles.css (`--paragraph-gap`), which
-    // must out-specify Tailwind Typography's `prose` margins — so no
-    // `my-*` here on purpose.
-    <p className={cn('wrap-anywhere leading-(--dt-line-height)', className)} {...props}>
+    <p className={paragraphClass} {...props}>
       {children}
     </p>
   )

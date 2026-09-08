@@ -4,6 +4,8 @@ import type { TranslucencyState } from '@hermes/shared/translucency'
 import type { PoolLimits } from '../electron/pool-limits'
 
 import type { WakeIndicatorState } from './lib/wake-indicator'
+import type { IntroRevealBeatPush } from './store/intro-reveal'
+import type { OnboardingWizardOutcome } from './store/onboarding-wizard'
 import type {
   PetOverlayBounds,
   PetOverlayControl,
@@ -103,6 +105,38 @@ declare global {
         control: (payload: PetOverlayControl) => void
         onState: (callback: (payload: PetOverlayStatePayload) => void) => () => void
         onControl: (callback: (payload: PetOverlayControl) => void) => () => void
+      }
+      // Intro reveal: the full-screen first-run brand sequence. The main
+      // renderer owns the clock; the overlay window (`?win=intro`) renders
+      // particles + type and plays sound locally.
+      introReveal?: {
+        open: (payload?: { hideMain?: boolean }) => Promise<{ ok: boolean }>
+        close: (payload?: { showMain?: boolean }) => Promise<{ ok: boolean }>
+        pushBeat: (payload: IntroRevealBeatPush) => void
+        skip: () => void
+        onBeat: (callback: (payload: IntroRevealBeatPush) => void) => () => void
+        onSkip: (callback: () => void) => () => void
+        onClosed: (callback: () => void) => () => void
+      }
+      // Onboarding wizard: the Dia-style first-run setup in its OWN OS window
+      // (`?win=onboarding`) — the main app window stays hidden until it
+      // finishes, so setup never reads as an overlay on the app.
+      onboardingWizard?: {
+        open: (payload?: { mode?: 'full' | 'guide' | 'login'; needsProvider?: boolean }) => Promise<{ ok: boolean }>
+        ready: () => void
+        done: (payload: OnboardingWizardOutcome) => void
+        onDone: (callback: (payload: OnboardingWizardOutcome) => void) => () => void
+        onClosed: (callback: () => void) => () => void
+      }
+      // In-chat onboarding assembly: grow the main window outward by per-edge
+      // pixel deltas so the chat pane keeps its exact screen rect while the
+      // app assembles around it (see onboarding-chat/assembly.ts).
+      chatOnboarding?: {
+        grow: (deltas: { bottom: number; left: number; right: number; top: number }) => void
+        /** The guided chat is starting with NO wizard window ahead of it — main
+         *  pre-sizes the (hidden) app window to the solo-chat card so the first
+         *  visible frame is already the conversation panel. */
+        soloBoot?: () => void
       }
       // HUD mode: the chrome-free floating chat. A FULL app renderer with its
       // own gateway (like an instance window), sized and skinned as a floating
@@ -371,6 +405,10 @@ declare global {
       // resolved by Electron independently of the connected backend (#66899).
       // Created on demand; returns the normalized absolute path.
       desktopPluginsRoot?: () => Promise<string>
+      // Create one DIRECT child dir under the desktop-plugins root (onboarding's
+      // first-screen config folder). Scoped by name, never a full path.
+      mkdirDesktopPlugin?: (name: string) => Promise<{ ok: boolean; error?: string; path: string }>
+      materializeSkill?: (name: string, content: string) => Promise<{ ok: boolean; error?: string; path: string }>
       /** LOCAL `<HERMES_HOME>/logs` (profile-aware) — error card "Open Logs". */
       logsRoot?: () => Promise<string>
       // Local AGENT-plugin root (<HERMES_HOME>/plugins), same Electron-local
@@ -517,6 +555,9 @@ declare global {
       getVersion: () => Promise<DesktopVersionInfo>
       /** Restart the app in place — loads the swapped bundle when bundleSwapPending. */
       relaunchApp?: () => Promise<void>
+      /** Host facts for the guided first run. Optional: an older preload (a
+       *  mid-upgrade managed install) simply doesn't answer. */
+      getMachineProfile?: () => Promise<DesktopMachineProfile>
       getRemoteDisplayReason?: () => Promise<string | null>
       updates: {
         check: () => Promise<DesktopUpdateStatus>
@@ -600,6 +641,18 @@ export interface DesktopVersionInfo {
   /** True when the bundle on disk is newer than the running process — a plain
    *  app restart (no rebuild, no installer) is enough to load it. */
   bundleSwapPending?: boolean
+}
+
+export interface DesktopMachineProfile {
+  /** Days since the OS created this user account; null when unknowable. */
+  ageDays: null | number
+  arch: string
+  /** Hardware's self-reported model (`NVIDIA_DGX_Spark`); '' when unavailable. */
+  model: string
+  /** An NVIDIA GPU is present, by PCI vendor id. */
+  nvidia: boolean
+  platform: string
+  release: string
 }
 
 export type DesktopUninstallMode = 'full' | 'gui' | 'lite'

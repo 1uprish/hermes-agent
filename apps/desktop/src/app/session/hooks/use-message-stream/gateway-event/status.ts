@@ -1,3 +1,4 @@
+import { scheduleOnboardingRetry } from '@/components/onboarding-chat/retry'
 import { translateNow } from '@/i18n'
 import { textPart } from '@/lib/chat-messages'
 import { coerceGatewayText } from '@/lib/chat-runtime'
@@ -169,6 +170,24 @@ export function handleStatusEvent(ctx: GatewayEventContext): boolean {
   if (event.type === 'error') {
     const errorMessage = payload?.message || 'Hermes reported an error'
     const looksLikeProviderSetup = isProviderSetupErrorMessage(errorMessage)
+
+    // Guided onboarding: a machine turn (kickoff brief / [setup] report)
+    // that died with nothing delivered replays once, quietly — a transient
+    // portal 4xx/5xx on the cold first-run stack must not paint a raw HTTP
+    // row into the magical setup (seen live). One budget; a second failure
+    // falls through to the full surface below.
+    if (sessionId && scheduleOnboardingRetry(sessionId)) {
+      updateSessionState(sessionId, state => ({
+        ...state,
+        streamId: null,
+        awaitingResponse: true,
+        busy: true,
+        turnStartedAt: null,
+        turnLive: false
+      }))
+
+      return true
+    }
 
     // A turn that errors out has also ended — drop any open blocking prompt
     // for this session so an approval/sudo/secret overlay can't linger past

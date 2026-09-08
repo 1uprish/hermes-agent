@@ -13733,6 +13733,503 @@ function closePetOverlay() {
   petOverlayWindow = null
 }
 
+// ── Intro reveal ────────────────────────────────────────────────────────────
+// The first-run (and replayable) brand sequence. A transparent, frameless,
+// always-on-top window sized to the entire primary display, so the story
+// plays directly over the user's real desktop — via the exact window shape
+// the pet overlay already proves out (transparent + panel +
+// hiddenInMissionControl on macOS).
+//
+// The overlay renderer is gateway-less (`?win=intro`): the main renderer owns
+// the sequence store and bridges skip/close over IPC; the overlay clocks and
+// renders the sequence and plays its own sound locally (its AudioContext is
+// allowed because the window is created with the chat webPreferences,
+// autoplay included).
+
+let introRevealWindow = null
+// Watchdog: no matter what happens in any renderer, the screen comes back.
+// Armed on open, cleared on close/closed. Slightly over the sequence length.
+let introRevealWatchdog = null
+
+const INTRO_REVEAL_WATCHDOG_MS = 30_000
+
+function clearIntroRevealWatchdog() {
+  if (introRevealWatchdog) {
+    clearTimeout(introRevealWatchdog)
+    introRevealWatchdog = null
+  }
+}
+
+function introRevealUrl() {
+  if (DEV_SERVER) {
+    return `${DEV_SERVER.endsWith('/') ? DEV_SERVER.slice(0, -1) : DEV_SERVER}/?win=intro#/`
+  }
+
+  return `${pathToFileURL(resolveRendererIndex()).toString()}?win=intro#/`
+}
+
+// Frost fades: runtime setVibrancy carries a native animationDuration, so the
+// glass eases in as the window shows and eases out before it closes. 'hud' is
+// the DARK material — the sequence is dark-mode; a light material here is
+// what a mid-dissolve white flash looks like. Best-effort — a failure must
+// never block open/close.
+const INTRO_FROST_IN_MS = 500
+const INTRO_FROST_OUT_MS = 600
+
+function applyIntroFrost(win) {
+  if (!IS_MAC) {
+    return
+  }
+
+  try {
+    win.setVibrancy('hud', { animationDuration: INTRO_FROST_IN_MS })
+  } catch {
+    // Older Electron without animated vibrancy — set it plain.
+    try {
+      win.setVibrancy('hud')
+    } catch {
+      // No vibrancy at all; the CSS wash still carries the dim.
+    }
+  }
+}
+
+function clearIntroFrost(win) {
+  if (!IS_MAC) {
+    return
+  }
+
+  try {
+    win.setVibrancy(null, { animationDuration: INTRO_FROST_OUT_MS })
+  } catch {
+    try {
+      win.setVibrancy(null)
+    } catch {
+      // Window is on its way out regardless.
+    }
+  }
+}
+
+function spawnIntroRevealWindow() {
+  const display = screen.getPrimaryDisplay()
+  const { x, y, width, height } = display.bounds
+
+  const win = new BrowserWindow({
+    x,
+    y,
+    width,
+    height,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: !IS_MAC,
+    hasShadow: false,
+    alwaysOnTop: true,
+    type: IS_MAC ? 'panel' : undefined,
+    hiddenInMissionControl: IS_MAC,
+    // The sequence needs Esc/click-to-skip, so unlike the pet overlay this
+    // window takes focus while it is up.
+    focusable: true,
+    show: false,
+    backgroundColor: '#00000000',
+    // Frost arrives via runtime setVibrancy (see applyIntroFrost) so it can
+    // FADE in/out — a creation-option material pops on at full strength.
+    // 'active' pins the appearance so an unfocused window doesn't collapse
+    // the material to its washed-out inactive look once frost applies.
+    visualEffectState: IS_MAC ? 'active' : undefined,
+    webPreferences: chatWindowWebPreferences(PRELOAD_PATH)
+  })
+
+  try {
+    win.setAlwaysOnTop(true, 'screen-saver')
+    win.setVisibleOnAllWorkspaces(true, IS_MAC ? { visibleOnFullScreen: true, skipTransformProcessType: true } : undefined)
+  } catch {
+    // Not supported everywhere — best effort.
+  }
+
+  wireCommonWindowHandlers(win, zoomWiringForWindowKind('petOverlay'))
+  wireWindowReveal(win, {
+    show: () => {
+      win.show()
+      // Ease the frost in once the window is actually on screen.
+      applyIntroFrost(win)
+    }
+  })
+  installWindowRendererLifecycle(win, { kind: 'overlay', callbacks: { log: rememberLog } })
+
+  win.on('closed', () => {
+    if (introRevealWindow === win) {
+      introRevealWindow = null
+      clearIntroRevealWatchdog()
+    }
+
+    // If the window went away on its own (⌘W), tell the main renderer so its
+    // store doesn't sit in `playing` forever.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('hermes:intro-reveal:closed')
+    }
+  })
+
+  attachRendererConsoleCapture(win, 'intro-reveal', rememberLog)
+  loadWindowUrl(win, introRevealUrl(), 'Intro reveal')
+
+  return win
+}
+
+function openIntroReveal() {
+  clearIntroRevealWatchdog()
+  // Hard ceiling: whatever happens in any renderer (crash, stalled clock,
+  // dropped IPC), the screen comes back on its own.
+  introRevealWatchdog = setTimeout(() => {
+    introRevealWatchdog = null
+    closeIntroReveal()
+    // The renderer never ended the sequence — the first-run chain is broken,
+    // so bring the (possibly hidden) app back rather than leave a bare desktop.
+    showMainAfterOnboarding()
+  }, INTRO_REVEAL_WATCHDOG_MS)
+
+  if (introRevealWindow && !introRevealWindow.isDestroyed()) {
+    // Warm replay: the parked window reloads (V8 code cache, no window or
+    // compositor setup) and shows when the fresh surface is ready.
+    const win = introRevealWindow
+
+    win.webContents.once('did-finish-load', () => {
+      if (!win.isDestroyed()) {
+        win.show()
+        applyIntroFrost(win)
+      }
+    })
+    // Parked on about:blank — load the surface back in. Still warm: the
+    // bundle's V8 code cache and the window/compositor survive the park.
+    loadWindowUrl(win, introRevealUrl(), 'Intro reveal')
+
+    return win
+  }
+
+  introRevealWindow = spawnIntroRevealWindow()
+
+  return introRevealWindow
+}
+
+function closeIntroReveal() {
+  clearIntroRevealWatchdog()
+
+  if (introRevealWindow && !introRevealWindow.isDestroyed()) {
+    const win = introRevealWindow
+
+    // Ease the frost out, then PARK the window (hide, not close): the next
+    // replay reuses it for a warm start. A blank page unloads the surface so
+    // nothing ticks while parked; real closes (quit, ⌘W) still destroy it via
+    // the 'closed' handler.
+    clearIntroFrost(win)
+    setTimeout(() => {
+      if (!win.isDestroyed()) {
+        win.hide()
+        void win.webContents.loadURL('about:blank')
+      }
+    }, INTRO_FROST_OUT_MS)
+  }
+}
+
+ipcMain.handle('hermes:intro-reveal:open', async (_event, payload) => {
+  openIntroReveal()
+
+  // First-run chain: the cinematic (and the wizard after it) own the screen —
+  // the app hides so the sequence plays over the bare desktop. The flag is
+  // shared with the wizard window so whichever surface ends the chain
+  // restores the app exactly once.
+  if (payload?.hideMain && mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+    onboardingFlowHidMain = true
+    mainWindow.hide()
+  }
+
+  return { ok: true }
+})
+
+ipcMain.handle('hermes:intro-reveal:close', async (_event, payload) => {
+  closeIntroReveal()
+
+  // Replays (and skips with no wizard following) hand the screen straight
+  // back; the first-run chain keeps the app hidden for the wizard window.
+  if (payload?.showMain) {
+    showMainAfterOnboarding()
+  }
+
+  return { ok: true }
+})
+
+// Main renderer → overlay: beat clock + leaving flag for the exit dissolve.
+ipcMain.on('hermes:intro-reveal:beat', (_event, payload) => {
+  if (introRevealWindow && !introRevealWindow.isDestroyed()) {
+    introRevealWindow.webContents.send('hermes:intro-reveal:beat', payload)
+  }
+})
+
+// Overlay → main renderer: user asked to skip (Esc/click inside the overlay).
+ipcMain.on('hermes:intro-reveal:skip', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('hermes:intro-reveal:skip')
+  }
+})
+
+
+// ── Onboarding wizard window ────────────────────────────────────────────────
+//
+// The Dia-style first-run setup lives in its OWN frameless window, centered
+// over the user's desktop — the main app window stays HIDDEN for the whole
+// video → wizard chain so onboarding never reads as an overlay on the app.
+// The wizard renderer (`?win=onboarding`) is gateway-less like the intro
+// overlay; answers persist through the shared origin localStorage, and the
+// outcome rides one IPC back through here to the main renderer, which commits
+// the picks and starts the first chat.
+
+let onboardingWizardWindow = null
+// Reveal controller for the wizard window. Reveal rides the renderer's
+// explicit ready IPC, not `ready-to-show`: under the dev server that event
+// fires on the empty HTML shell's first paint (before React mounts), which
+// composites a blank window — a visible blip before the card's entrance.
+let onboardingWizardReveal = null
+// Whether the first-run chain (intro video and/or wizard window) hid the main
+// window — whichever surface ends the chain restores it exactly once.
+let onboardingFlowHidMain = false
+
+function onboardingWizardUrl(needsProvider, mode) {
+  const query = `?win=onboarding${needsProvider ? '&providers=1' : ''}${mode === 'login' ? '&mode=login' : ''}`
+
+  if (DEV_SERVER) {
+    return `${DEV_SERVER.endsWith('/') ? DEV_SERVER.slice(0, -1) : DEV_SERVER}/${query}#/`
+  }
+
+  return `${pathToFileURL(resolveRendererIndex()).toString()}${query}#/`
+}
+
+function showMainAfterOnboarding() {
+  if (!onboardingFlowHidMain) {
+    return
+  }
+
+  onboardingFlowHidMain = false
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return
+  }
+
+  // Fade the app back in instead of popping it — the finale card dissolves
+  // over the desktop, then the app rises out of it. setOpacity is a no-op on
+  // Linux, where the window simply shows at full opacity.
+  const FADE_MS = 450
+  const started = Date.now()
+
+  mainWindow.setOpacity(0)
+  mainWindow.show()
+  mainWindow.focus()
+
+  const timer = setInterval(() => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      clearInterval(timer)
+
+      return
+    }
+
+    const t = Math.min(1, (Date.now() - started) / FADE_MS)
+
+    // Ease-out: fast rise, soft landing.
+    mainWindow.setOpacity(t * (2 - t))
+
+    if (t >= 1) {
+      clearInterval(timer)
+    }
+  }, 16)
+}
+
+function spawnOnboardingWizardWindow(needsProvider, mode) {
+  const display = screen.getPrimaryDisplay()
+  const { workArea } = display
+  // The window IS the modal card — no stage, no backdrop. The desktop sits
+  // directly behind a small floating panel, exactly the Dia shape. Login mode
+  // is one card, no media column tour — a tighter panel.
+  const width = Math.min(mode === 'login' ? 680 : 720, workArea.width - 120)
+  const height = Math.min(mode === 'login' ? 460 : 500, workArea.height - 120)
+
+  const win = new BrowserWindow({
+    x: Math.round(workArea.x + (workArea.width - width) / 2),
+    y: Math.round(workArea.y + (workArea.height - height) / 2),
+    width,
+    height,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    show: false,
+    hasShadow: true,
+    // Transparent host: the card's own CSS radius is the window shape.
+    backgroundColor: '#00000000',
+    webPreferences: chatWindowWebPreferences(PRELOAD_PATH)
+  })
+
+  wireCommonWindowHandlers(win, zoomWiringForWindowKind('petOverlay'))
+
+  // Show-on-renderer-ready: the wizard surface signals after mount + paint
+  // (double rAF in wizard-root.tsx), so the first composited frame is the
+  // card's entrance — never the blank pre-mount shell. did-finish-load arms
+  // the standard fallback so a hung renderer can't leave an invisible window.
+  const revealController = createWindowRevealController({
+    isDestroyed: () => win.isDestroyed(),
+    isVisible: () => win.isVisible(),
+    show: () => win.show()
+  })
+
+  onboardingWizardReveal = revealController
+  win.webContents.once('did-finish-load', revealController.scheduleFallback)
+  installWindowRendererLifecycle(win, { kind: 'overlay', callbacks: { log: rememberLog } })
+
+  win.on('closed', () => {
+    revealController.dispose()
+
+    if (onboardingWizardReveal === revealController) {
+      onboardingWizardReveal = null
+    }
+
+    if (onboardingWizardWindow === win) {
+      onboardingWizardWindow = null
+    }
+
+    // No matter how the window went away (outcome, ⌘W, crash), the app must
+    // come back — an invisible main window is unrecoverable for the user.
+    showMainAfterOnboarding()
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('hermes:onboarding-wizard:closed')
+    }
+  })
+
+  attachRendererConsoleCapture(win, 'onboarding-wizard', rememberLog)
+  loadWindowUrl(win, onboardingWizardUrl(needsProvider, mode), 'Onboarding wizard')
+
+  return win
+}
+
+ipcMain.on('hermes:onboarding-wizard:ready', () => {
+  onboardingWizardReveal?.reveal()
+})
+
+ipcMain.handle('hermes:onboarding-wizard:open', async (_event, payload) => {
+  if (!onboardingWizardWindow || onboardingWizardWindow.isDestroyed()) {
+    onboardingWizardWindow = spawnOnboardingWizardWindow(
+      Boolean(payload?.needsProvider),
+      payload?.mode === 'login' ? 'login' : 'full'
+    )
+  } else {
+    onboardingWizardWindow.focus()
+  }
+
+  // Setup owns the screen: the app waits, hidden, until the outcome IPC.
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+    onboardingFlowHidMain = true
+    mainWindow.hide()
+  }
+
+  return { ok: true }
+})
+
+// Wizard window → main renderer, via main: the outcome. Close the wizard,
+// bring the app back, and forward the payload so the renderer commits + kicks
+// off the first chat.
+ipcMain.on('hermes:onboarding-wizard:done', (_event, payload) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('hermes:onboarding-wizard:done', payload ?? {})
+  }
+
+  // Login mode → guided chat: the app returns as the small solo-chat window
+  // (the guide grows it when the layout card is picked). Sized while still
+  // hidden so the first visible frame is already the conversation panel —
+  // mirrors the dev:chat boot dimensions.
+  if (payload?.soloChat && mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+    const area = screen.getDisplayMatching(mainWindow.getBounds()).workArea
+    const width = Math.min(600, area.width)
+    const height = Math.min(640, area.height)
+
+    mainWindow.setBounds({
+      height,
+      width,
+      x: Math.round(area.x + (area.width - width) / 2),
+      y: Math.round(area.y + (area.height - height) / 2)
+    })
+  }
+
+  showMainAfterOnboarding()
+
+  if (onboardingWizardWindow && !onboardingWizardWindow.isDestroyed()) {
+    onboardingWizardWindow.close()
+  }
+})
+
+
+// In-chat onboarding assembly: grow the main window OUTWARD by per-edge pixel
+// deltas — the minimum the picked layout needs. The grown frame then GENTLY
+// RE-CENTERS in the display's work area (one animated setBounds: macOS's
+// native glide), so repeated growth (panes right, sidebar left) never leaves
+// the app pinned off-center or kissing a screen edge. Growth is clamped to
+// 92% of the work area so the window always keeps breathing room.
+ipcMain.on('hermes:chat-onboarding:grow', (event, deltas) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+    return
+  }
+
+  // Renderers ask in CSS pixels; the window lives in physical (DIP) pixels.
+  // At first-run zoom (118%) an unscaled 380px pane request would arrive
+  // ~15% short and squeeze the chat. Convert here, at the single funnel.
+  const zoom = event.sender.getZoomFactor() || 1
+  const clampDelta = value => Math.max(0, Math.min(4000, Math.round((Number(value) || 0) * zoom)))
+  const left = clampDelta(deltas?.left)
+  const top = clampDelta(deltas?.top)
+  const right = clampDelta(deltas?.right)
+  const bottom = clampDelta(deltas?.bottom)
+  const b = mainWindow.getBounds()
+  const area = screen.getDisplayMatching(b).workArea
+
+  const maxWidth = Math.round(area.width * 0.92)
+  const maxHeight = Math.round(area.height * 0.92)
+  const width = Math.min(b.width + left + right, maxWidth)
+  const height = Math.min(b.height + top + bottom, maxHeight)
+  const x = Math.round(area.x + (area.width - width) / 2)
+  const y = Math.round(area.y + (area.height - height) / 2)
+
+  mainWindow.setBounds({ height, width, x, y }, true)
+})
+
+// The guided chat is starting with NO wizard window ahead of it (the first-run
+// chain is now cinematic → solo chat directly). Pre-size the app window to the
+// solo-chat card — the same dimensions the login-mode outcome used to apply —
+// so the guided chat reads as the small conversation panel, then reveal with
+// the standard fade. Sizing applies even if something (the intro watchdog's
+// safety reveal, a slow gateway) already showed the window full-size: the
+// kickoff is about to strip the layout to chat-only, and a full-size empty
+// shell is exactly the wrong first frame.
+ipcMain.on('hermes:chat-onboarding:solo-boot', event => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+    return
+  }
+
+  const area = screen.getDisplayMatching(mainWindow.getBounds()).workArea
+  const width = Math.min(600, area.width)
+  const height = Math.min(640, area.height)
+
+  mainWindow.setBounds({
+    height,
+    width,
+    x: Math.round(area.x + (area.width - width) / 2),
+    y: Math.round(area.y + (area.height - height) / 2)
+  })
+
+  showMainAfterOnboarding()
+})
+
 // ── HUD mode ────────────────────────────────────────────────────────────────
 //
 // The chrome-free floating chat: a transparent, frameless, always-on-top
@@ -14181,10 +14678,9 @@ function openHudWindow(sessionId, profile) {
   const profileKey = typeof profile === 'string' && profile.trim() ? profile.trim() : null
 
   if (hudWindow && !hudWindow.isDestroyed()) {
-    // Pointed at another PROFILE: the live renderer is bound to the old
-    // profile's backend, and a renderer adopts its backend exactly once at
-    // boot — an in-place goto would resolve the id against the wrong backend
-    // (the #82285 fallback). Respawn against the right one.
+    // Pointed at another PROFILE: the live renderer adopts its backend once
+    // at boot — an in-place goto can't change it. Respawn against the right
+    // profile.
     if (profileKey && hudProfile !== profileKey) {
       const win = hudWindow
       hudWindow = null
@@ -14463,8 +14959,23 @@ function closeQuickEntryWindow() {
 function createWindow() {
   const icon = getAppIconPath()
   const savedWindowState = readWindowState()
+  // dev:chat boots the in-chat guided onboarding: the window is BORN small and
+  // centered (the solo chat), then grows outward when the user picks a layout
+  // (see 'hermes:chat-onboarding:grow'). Sized to the conversation alone — the
+  // onboarding cards are max-w-md plus the thread's px-6; anything wider is
+  // dead margin before assembly. Dev-only: the var rides the npm script's
+  // cross-env, so packaged builds never see it.
+  const chatOnboardingBoot = process.env.VITE_ONBOARDING_STAGE === 'chat' ? { height: 640, width: 600 } : null
+  const windowOptions = computeWindowOptions(savedWindowState, screen.getAllDisplays())
+
+  if (chatOnboardingBoot) {
+    delete windowOptions.x
+    delete windowOptions.y
+  }
+
   mainWindow = new BrowserWindow({
-    ...computeWindowOptions(savedWindowState, screen.getAllDisplays()),
+    ...windowOptions,
+    ...chatOnboardingBoot,
     minWidth: WINDOW_MIN_WIDTH,
     minHeight: WINDOW_MIN_HEIGHT,
     title: 'Hermes',
@@ -17548,6 +18059,85 @@ ipcMain.handle('hermes:app:relaunch', async () => {
   app.relaunch({ args: buildNoSandboxRelaunchArgs(process.argv.slice(1)) })
   void exitAfterBackendShutdown(0)
 })
+
+// Host facts the guided first run asks for once, to decide whether "set this
+// machine up" is the likeliest first task or just one option among several.
+// Age is the birthtime of the user's home directory — when the OS created this
+// account, the closest thing to "when did this machine become theirs" that
+// costs a single stat. Filesystems that keep no birthtime report null, and the
+// flow reads unknown as not-new.
+ipcMain.handle('hermes:machine:profile', async () => {
+  let ageDays: null | number = null
+
+  try {
+    const { birthtimeMs } = fs.statSync(os.homedir())
+
+    if (birthtimeMs > 0) {
+      ageDays = Math.max(0, Math.floor((Date.now() - birthtimeMs) / 86_400_000))
+    }
+  } catch {
+    // Unknown age — the option still shows, it just doesn't lead.
+  }
+
+  return {
+    ageDays,
+    arch: process.arch,
+    model: readHardwareModel(),
+    nvidia: await hasNvidiaGpu(),
+    platform: process.platform,
+    release: os.release(),
+    ...readFakeMachine()
+  }
+})
+
+/** The board's own name for itself. Firmware writes it to the device tree on
+ *  ARM systems (`NVIDIA_DGX_Spark`), which is how the first run can greet a
+ *  DGX Spark as a Spark instead of "a Linux box". Empty everywhere else,
+ *  Windows included — the RTX Spark is identified from the GPU instead. */
+function readHardwareModel(): string {
+  try {
+    return fs.readFileSync('/proc/device-tree/model', 'utf8').replace(/\0/g, '').trim()
+  } catch {
+    return ''
+  }
+}
+
+/** Dev only (`npm run dev:fresh -- --spark`, `-- --new`): fields to answer the
+ *  probe with instead of this host's. The fork's shape depends on hardware
+ *  almost nobody working on it has to hand, and a path that can only be
+ *  exercised on the demo machine is a path that rots between demos.
+ *
+ *  It overlays rather than replaces, so `{"ageDays":0}` is a brand-new version
+ *  of the machine you are actually sitting at — which is the difference between
+ *  rehearsing "Help me set up this Mac" and rehearsing a Linux box nobody has.
+ *  Ignored in a packaged app. */
+function readFakeMachine(): object {
+  if (app.isPackaged || !process.env.HERMES_DESKTOP_FAKE_MACHINE) {
+    return {}
+  }
+
+  try {
+    return JSON.parse(process.env.HERMES_DESKTOP_FAKE_MACHINE) as object
+  } catch {
+    return {}
+  }
+}
+
+const NVIDIA_PCI_VENDOR_ID = 0x10de
+
+/** Chromium already enumerated the GPUs to decide how to composite, so this is
+ *  a lookup rather than a probe — no subprocess, no vendor tooling that a
+ *  just-unboxed machine may not have yet. Paired with Windows-on-Arm it is what
+ *  names an RTX Spark. */
+async function hasNvidiaGpu(): Promise<boolean> {
+  try {
+    const info = (await app.getGPUInfo('basic')) as { gpuDevice?: { vendorId?: number }[] }
+
+    return (info.gpuDevice ?? []).some(device => device.vendorId === NVIDIA_PCI_VENDOR_ID)
+  } catch {
+    return false
+  }
+}
 
 // ===========================================================================
 // Uninstall — remove the Chat GUI (and optionally the agent / user data).

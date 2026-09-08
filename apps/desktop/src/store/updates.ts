@@ -20,6 +20,7 @@ import { persistString, storedString } from '@/lib/storage'
 import { $connectionsRegistry, refreshConnectionsRegistry } from '@/store/connections'
 import { reconnectGateway } from '@/store/gateway-reconnect'
 import { dismissNotification, notify } from '@/store/notifications'
+import { onboardingSurfaceActive } from '@/store/onboarding-presence'
 import { $connection } from '@/store/session'
 import type { BackendUpdateCheckResponse } from '@/types/hermes'
 
@@ -212,6 +213,15 @@ export function reportInstallMethodWarning(message: string | undefined): void {
  */
 export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null, target: UpdateTarget = 'client') {
   if (!status || status.supported === false || status.error || !status.targetSha) {
+    return
+  }
+
+  // Never over onboarding: the intro cinematic, the wizard/login window, and
+  // the guided first chat all own the screen — an update toast mid-chain
+  // breaks the moment (and every first-run screen recording). The poller
+  // fires again minutes later; the toast keeps its own snooze machinery, so
+  // dropping this one costs nothing.
+  if (onboardingSurfaceActive()) {
     return
   }
 

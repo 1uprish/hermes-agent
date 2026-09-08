@@ -22,6 +22,8 @@ import {
   updateComposerAttachment
 } from '@/store/composer'
 import { resetSessionBackground } from '@/store/composer-status'
+import { requestGatewayForAgent } from '@/store/gateway'
+import { instantAccountSettled } from '@/store/instant-account'
 import { clearNotifications, notify, notifyError } from '@/store/notifications'
 import { clearPreviewArtifacts } from '@/store/preview-status'
 import { clearAllPrompts } from '@/store/prompts'
@@ -606,6 +608,12 @@ export function usePromptActions({
 
   const submitText = useCallback(
     async (rawText: string, options?: SubmitTextOptions) => {
+      // Instant-account mint racing the first message: wait for it to settle
+      // (bounded — every mint path terminates) so the first send lands on the
+      // provider that is one breath away from existing. Indistinguishable
+      // from model latency; a settled mint resolves immediately.
+      await instantAccountSettled()
+
       const visibleText = sanitizeComposerInput(rawText).trim()
       const attachments = options?.attachments ?? $composerAttachments.get()
 

@@ -17,6 +17,7 @@ import {
 } from 'react'
 import { type GetTargetScrollTop, useStickToBottom } from 'use-stick-to-bottom'
 
+import { $chatOnboardingThreadIds, $onboardingGreeting } from '@/components/onboarding-chat/assembly'
 import { usePaneLifecycle, usePaneVisible } from '@/components/pane-shell/pane-visibility'
 import { useI18n } from '@/i18n'
 import { messagePaintWeight } from '@/lib/render-weight'
@@ -152,6 +153,62 @@ export function shouldSnapOnRunStart(remainingPx: number, thresholdPx = RUN_STAR
 // the reader's position; only a session switch or a cold-load arrival re-pins.
 export function shouldRePinOnTranscriptReload(opts: { sessionSwitched: boolean; settledNonEmpty: boolean }): boolean {
   return opts.sessionSwitched || !opts.settledNonEmpty
+}
+
+/** The pre-banked onboarding greeting, revealed like a streamed turn: a short
+ *  beat (the agent "starting"), then word-cluster typing over ~1.4s with a
+ *  caret that blinks out when done. prefers-reduced-motion renders instantly.
+ *  Reveal length is state; the full text stays in the DOM for layout only via
+ *  the visible slice (height grows exactly like real streaming). */
+function OnboardingGreetingRow({ text }: { text: string }) {
+  const [shown, setShown] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? text.length : 0
+  )
+
+  const done = shown >= text.length
+
+  useEffect(() => {
+    if (shown >= text.length) {
+      return
+    }
+
+    // Word-cluster cadence: reveal 1-3 words per tick at 60-110ms — the
+    // shape of real model streaming, not a teletype.
+    const tick = () => {
+      setShown(current => {
+        if (current >= text.length) {
+          return current
+        }
+
+        let next = current
+        const words = 1 + Math.floor(Math.random() * 3)
+
+        for (let i = 0; i < words; i += 1) {
+          const space = text.indexOf(' ', next + 1)
+
+          next = space === -1 ? text.length : space
+        }
+
+        return Math.min(next, text.length)
+      })
+    }
+
+    const start = window.setTimeout(tick, shown === 0 ? 450 : 60 + Math.random() * 50)
+
+    return () => window.clearTimeout(start)
+  }, [shown, text])
+
+  return (
+    <div
+      className="mb-(--conversation-turn-gap) whitespace-pre-wrap leading-relaxed"
+      data-onboarding-greeting
+    >
+      {text.slice(0, shown)}
+      {!done && (
+        <span className="ml-0.5 inline-block h-[1.05em] w-[2px] translate-y-[0.18em] animate-pulse bg-foreground/70" />
+      )}
+    </div>
+  )
 }
 
 export function subscribeToThreadForeground(shouldReanchor: () => boolean, onReanchor: () => void): () => void {
@@ -415,8 +472,29 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
   // Row structure is memoized on the STRUCTURAL signature only, so streaming
   // part-appends can't churn group identity (that would defeat the rows memo
   // below on every tick). Weights are folded in separately for the budget.
-  const groups = useMemo(() => buildGroups(structuralSignature), [structuralSignature])
-  const renderEmpty = groups.length === 0 && Boolean(emptyPlaceholder)
+  const onboardingThreadIds = useStore($chatOnboardingThreadIds)
+  const onboardingGreeting = useStore($onboardingGreeting)
+  const bankedGreeting = Boolean(sessionKey && onboardingThreadIds.includes(sessionKey) && onboardingGreeting)
+
+  const groups = useMemo(() => {
+    const built = buildGroups(structuralSignature)
+
+    if (!bankedGreeting) {
+      return built
+    }
+
+    // The banked greeting owns everything before the user's first visible
+    // message. The model's reply to the hidden kickoff is SUPPOSED to be an
+    // invisible ::onboarding{step="ready"} ack, but a small model narrates
+    // instead ("I'll start by understanding the current state of this
+    // task…" leaked in a live run) — so the guarantee is structural: leading
+    // assistant-only groups render as nothing, whatever they contain.
+    const firstTurn = built.findIndex(group => group.kind === 'turn')
+
+    return firstTurn === -1 ? [] : firstTurn === 0 ? built : built.slice(firstTurn)
+  }, [structuralSignature, bankedGreeting])
+
+  const renderEmpty = groups.length === 0 && Boolean(emptyPlaceholder) && !bankedGreeting
 
   // use-stick-to-bottom owns scrollTop (single writer): follow while locked,
   // escape on user scroll-up, re-lock at bottom. Snap instantly, not spring — a
@@ -595,9 +673,34 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
   // traffic lights.
   const secondaryTitlebarGap = 'calc(var(--titlebar-height) + 0.75rem)'
 
+  // Hermes-speaks-first sessions (the onboarding kickoff's hidden seeded
+  // turn) have no user bubble above the opening assistant turn, so the first
+  // painted row is the assistant's thought/text flush against the pane
+  // chrome. Give the greeting some air.
+
+  // The guided-setup thread reads larger (~16px body vs the app's 14px) — a
+  // conversation, not a work surface. Marked with data-thread-type so the
+  // scaling itself lives in styles.css as a plain override.
+  const threadType = sessionKey && onboardingThreadIds.includes(sessionKey) ? 'onboarding' : undefined
+
+  // The guided chat's opening line is PRE-BANKED and rendered here, client-
+  // side, the instant the thread mounts — the model's cold first turn took up
+  // to 10s in live runs and the greeting must never wait on it. The kickoff
+  // brief tells the model exactly what was said; its first reply is an
+  // invisible ready-ack, and the conversation continues from the user's name.
+  // It TYPES itself in (OnboardingGreetingRow) so it reads as the agent
+  // speaking, not a static label — the banked line must be indistinguishable
+  // from a streamed turn.
+  const greetingRow =
+    threadType === 'onboarding' && onboardingGreeting ? <OnboardingGreetingRow text={onboardingGreeting} /> : null
+
+  const assistantOpensThread = (hiddenCount === 0 && groups[0]?.kind === 'standalone') || Boolean(greetingRow)
+
   const threadContentTopPad = secondaryWindow
     ? 'pt-[calc(var(--titlebar-height)+0.75rem)]'
-    : 'pt-[calc(var(--titlebar-height)-0.5rem)]'
+    : assistantOpensThread
+      ? 'pt-[calc(var(--titlebar-height)+1rem)]'
+      : 'pt-[calc(var(--titlebar-height)-0.5rem)]'
 
   useEffect(() => publishThreadAtBottom(isAtBottom, { paneVisible }), [isAtBottom, paneVisible])
   useEffect(() => () => resetPublishedThreadScroll({ paneVisible }), [paneVisible])
@@ -829,6 +932,7 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
           <div
             className={cn('mx-auto flex w-full max-w-(--composer-width) min-w-0 flex-col px-6', threadContentTopPad)}
             data-slot="aui_thread-content"
+            data-thread-type={threadType}
             ref={contentRef as React.RefCallback<HTMLDivElement>}
           >
             {(hiddenCount > 0 || olderAvailable) && (
@@ -840,6 +944,7 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
                 {t.assistant.thread.showEarlier}
               </button>
             )}
+            {greetingRow}
             {rows}
             {loadingIndicator}
             {clampToComposer && (

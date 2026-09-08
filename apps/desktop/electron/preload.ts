@@ -81,6 +81,72 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
       return () => ipcRenderer.removeListener('hermes:pet-overlay:control', listener)
     }
   },
+  // Intro reveal: the full-screen first-run brand sequence. The main renderer
+  // owns the clock; the overlay window (`?win=intro`) renders particles + type
+  // and plays sound locally. Channels mirror the pet overlay's shape.
+  introReveal: {
+    open: () => ipcRenderer.invoke('hermes:intro-reveal:open'),
+    close: () => ipcRenderer.invoke('hermes:intro-reveal:close'),
+    // Main renderer → overlay: sequence clock ({ beat, leaving }).
+    pushBeat: payload => ipcRenderer.send('hermes:intro-reveal:beat', payload),
+    // Overlay → main renderer: user skipped (Esc/click) inside the overlay.
+    skip: () => ipcRenderer.send('hermes:intro-reveal:skip'),
+    // Overlay subscribes to the beat clock.
+    onBeat: callback => {
+      const listener = (_event, payload) => callback(payload)
+      ipcRenderer.on('hermes:intro-reveal:beat', listener)
+
+      return () => ipcRenderer.removeListener('hermes:intro-reveal:beat', listener)
+    },
+    // Main renderer learns the user skipped inside the overlay.
+    onSkip: callback => {
+      const listener = () => callback()
+      ipcRenderer.on('hermes:intro-reveal:skip', listener)
+
+      return () => ipcRenderer.removeListener('hermes:intro-reveal:skip', listener)
+    },
+    // Main renderer learns the overlay window closed on its own (⌘W).
+    onClosed: callback => {
+      const listener = () => callback()
+      ipcRenderer.on('hermes:intro-reveal:closed', listener)
+
+      return () => ipcRenderer.removeListener('hermes:intro-reveal:closed', listener)
+    }
+  },
+  // Onboarding wizard: the Dia-style first-run setup in its OWN OS window
+  // (`?win=onboarding`) — the main app window stays hidden until it finishes,
+  // so setup never reads as an overlay on the app.
+  onboardingWizard: {
+    // Main renderer asks for the window ({ needsProvider }); main hides the app.
+    open: payload => ipcRenderer.invoke('hermes:onboarding-wizard:open', payload),
+    // Wizard window signals its surface has painted — main reveals the OS
+    // window only now (ready-to-show fires on the empty shell = a blank blip).
+    ready: () => ipcRenderer.send('hermes:onboarding-wizard:ready'),
+    // Wizard window reports the outcome ({ completed, providerReady }); main
+    // closes it, shows the app, and forwards the payload to the main renderer.
+    done: payload => ipcRenderer.send('hermes:onboarding-wizard:done', payload),
+    // Main renderer learns the outcome to commit answers + start the chat.
+    onDone: callback => {
+      const listener = (_event, payload) => callback(payload)
+      ipcRenderer.on('hermes:onboarding-wizard:done', listener)
+
+      return () => ipcRenderer.removeListener('hermes:onboarding-wizard:done', listener)
+    },
+    // Main renderer learns the window closed without an outcome (⌘W).
+    onClosed: callback => {
+      const listener = () => callback()
+      ipcRenderer.on('hermes:onboarding-wizard:closed', listener)
+
+      return () => ipcRenderer.removeListener('hermes:onboarding-wizard:closed', listener)
+    }
+  },
+  // In-chat onboarding assembly: the guided chat asks main to grow the window
+  // outward by per-edge pixel deltas, so the chat pane (and the composer under
+  // the user's cursor) keeps its screen rect while the app assembles around it.
+  chatOnboarding: {
+    grow: deltas => ipcRenderer.send('hermes:chat-onboarding:grow', deltas),
+    soloBoot: () => ipcRenderer.send('hermes:chat-onboarding:solo-boot')
+  },
   // HUD mode: the chrome-free floating chat. A full app renderer (own gateway)
   // sized as a floating bar, so it mounts the real composer. Main owns the
   // window; `onChanged` keeps every window's toggle truthful.
@@ -324,6 +390,8 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   desktopPluginsRoot: () => ipcRenderer.invoke('hermes:fs:desktopPluginsRoot'),
   logsRoot: () => ipcRenderer.invoke('hermes:fs:logsRoot'),
   agentPluginsRoot: () => ipcRenderer.invoke('hermes:fs:agentPluginsRoot'),
+  mkdirDesktopPlugin: name => ipcRenderer.invoke('hermes:fs:mkdirDesktopPlugin', name),
+  materializeSkill: (name, content) => ipcRenderer.invoke('hermes:fs:materializeSkill', name, content),
   renamePath: (targetPath, newName) => ipcRenderer.invoke('hermes:fs:rename', targetPath, newName),
   writeTextFile: (filePath, content) => ipcRenderer.invoke('hermes:fs:writeText', filePath, content),
   trashPath: targetPath => ipcRenderer.invoke('hermes:fs:trash', targetPath),
@@ -494,6 +562,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   },
   getVersion: () => ipcRenderer.invoke('hermes:version'),
   relaunchApp: () => ipcRenderer.invoke('hermes:app:relaunch'),
+  getMachineProfile: () => ipcRenderer.invoke('hermes:machine:profile'),
   getRemoteDisplayReason: () => ipcRenderer.invoke('hermes:get-remote-display-reason'),
   uninstall: {
     summary: () => ipcRenderer.invoke('hermes:uninstall:summary'),
