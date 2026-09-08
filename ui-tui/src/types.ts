@@ -205,6 +205,7 @@ export interface SessionInfo {
     user: string
     outcome?: string | null
   }>
+  execution_epoch?: string
   execution_generation?: number
   execution_state?: string
   running?: boolean

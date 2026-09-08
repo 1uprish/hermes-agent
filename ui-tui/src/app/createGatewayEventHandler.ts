@@ -770,6 +770,28 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       return
     }
 
+    // Lifecycle authority is local to an owner epoch. Only attachment RPC
+    // snapshots replace that epoch; delayed push events cannot reset it.
+    const current = getUiState().info
+    const lifecycle = ['session.info', 'message.start', 'message.complete', 'error'].includes(ev.type)
+
+    if (lifecycle && current?.execution_generation !== undefined) {
+      const incoming = (ev.payload ?? {}) as { execution_epoch?: string; execution_generation?: number }
+
+      if (
+        incoming.execution_epoch !== current.execution_epoch ||
+        typeof incoming.execution_generation !== 'number' ||
+        !Number.isSafeInteger(incoming.execution_generation) ||
+        incoming.execution_generation < current.execution_generation
+      ) {
+        return
+      }
+
+      if (ev.type !== 'session.info') {
+        patchUiState({ info: { ...current, execution_generation: incoming.execution_generation } })
+      }
+    }
+
     switch (ev.type) {
       case 'gateway.ready':
         handleReady(ev.payload?.skin)
@@ -787,13 +809,6 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         const incoming = ev.payload
 
         if (incoming.profile_name && current?.profile_name && incoming.profile_name !== current.profile_name) {
-          return
-        }
-
-        if (
-          current?.execution_generation !== undefined &&
-          (incoming.execution_generation === undefined || incoming.execution_generation < current.execution_generation)
-        ) {
           return
         }
 

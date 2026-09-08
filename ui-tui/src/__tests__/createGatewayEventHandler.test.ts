@@ -67,6 +67,42 @@ describe('createGatewayEventHandler', () => {
     patchUiState({ showReasoning: true })
   })
 
+  it('fences restarted owner lifecycle events until resume establishes the new epoch', () => {
+    const appended: Msg[] = []
+    const onEvent = createGatewayEventHandler(buildCtx(appended))
+
+    const info = { model: 'test', skills: {}, tools: {}, running: true,
+      execution_epoch: 'old-owner', execution_generation: 9 }
+
+    patchUiState({ sid: 'focused', info, busy: true })
+    const emit = (type: string, payload: any) => onEvent({ type, payload, session_id: 'focused' } as any)
+    emit('session.info', { execution_epoch: 'new-owner', execution_generation: 1, running: false })
+    expect(getUiState().busy).toBe(true)
+    // session.resume replaces info with the authoritative attachment snapshot.
+    patchUiState({ info: { ...info, execution_epoch: 'new-owner', execution_generation: 1 } })
+
+    for (const payload of [{}, { execution_epoch: 'old-owner', execution_generation: 99 },
+      { execution_epoch: 'new-owner', execution_generation: 0 }]) {
+      emit('message.complete', { ...payload, text: 'stale' })
+      emit('error', { ...payload, message: 'stale' })
+      emit('session.info', { ...payload, running: false })
+      expect(getUiState().busy).toBe(true)
+    }
+
+    expect(appended).toEqual([])
+    emit('message.complete', { execution_epoch: 'new-owner', execution_generation: 1, text: 'fresh' })
+    expect(getUiState().busy).toBe(false)
+    expect(appended.some(m => m.text === 'fresh')).toBe(true)
+    emit('message.start', { execution_epoch: 'new-owner', execution_generation: 2 })
+    emit('message.complete', { execution_epoch: 'new-owner', execution_generation: 1, text: 'late' })
+    expect(getUiState().busy).toBe(true)
+    expect(getUiState().info?.execution_generation).toBe(2)
+    emit('message.complete', { execution_epoch: 'new-owner', execution_generation: 4, text: 'missed start' })
+    emit('message.start', { execution_epoch: 'new-owner', execution_generation: 3 })
+    expect(getUiState().busy).toBe(false)
+    expect(getUiState().info?.execution_generation).toBe(4)
+  })
+
   it('heals missed completion and blocking prompts only from the focused authoritative idle snapshot', () => {
     patchUiState({ sid: 'focused' })
     const onEvent = createGatewayEventHandler(buildCtx([]))
