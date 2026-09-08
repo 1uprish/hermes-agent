@@ -354,7 +354,6 @@ import {
   type SecretStoragePolicy,
   writeSecretStoragePolicy
 } from './secret-storage-policy'
-import { registerPreparedSubmissions } from './prepared-submissions'
 import {
   buildInstanceWindowUrl,
   buildSessionWindowUrl,
