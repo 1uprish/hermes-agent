@@ -99,7 +99,8 @@ export function submitPrompt(
         if (item) {
           const accepted =
             r?.admission_id === item.submissionId &&
-            r?.target_session_id === sid &&
+            Boolean(destination.storedSid) &&
+            r?.target_session_id === destination.storedSid &&
             r?.target_profile_home === destination.profileHome &&
             ['queued', 'started', 'terminal', 'unknown'].includes(r?.status ?? '')
 

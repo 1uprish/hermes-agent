@@ -15,12 +15,12 @@ it('resumes a successor with a reset epoch while retaining original attempted ad
   const home = mkdtempSync(join(tmpdir(), 'ink-resume-epoch-'))
   vi.stubEnv('HERMES_HOME', home)
   resetUiState()
-  const info = { model: 'test', skills: {}, tools: {}, execution_epoch: 'old', execution_generation: 9, running: true }
+  const info = { model: 'test', skills: {}, tools: {}, stored_session_id: 'stored-old', execution_epoch: 'old', execution_generation: 9, running: true }
   patchUiState({ sid: 'old-session', info, busy: true })
   let queue!: ReturnType<typeof useQueue>
   let lifecycle!: ReturnType<typeof useSessionLifecycle>
 
-  const request = vi.fn(async () => ({ session_id: 'successor', resumed: 'successor', info: {
+  const request = vi.fn(async () => ({ session_id: 'successor', session_key: 'stored-successor', resumed: 'stored-successor', info: {
     ...info, execution_epoch: 'new', execution_generation: 0, running: false
   }, running: false, messages: [] }))
 
@@ -49,6 +49,9 @@ it('resumes a successor with a reset epoch while retaining original attempted ad
     expect(queue.queueRef.current.map(item => item.submissionId)).toEqual([attempted.submissionId, waiting.submissionId])
     expect(queue.queueRef.current[0]?.destination?.sid).toBe('old-session')
     expect(queue.queueRef.current[1]?.destination?.sid).toBe('successor')
+    expect(queue.queueRef.current[0]?.destination?.storedSid).toBe('stored-old')
+    expect(queue.queueRef.current[1]?.destination?.storedSid).toBe('stored-successor')
+    expect(getUiState().info?.stored_session_id).toBe('stored-successor')
     expect(queue.dequeue()).toBeUndefined()
   } finally {
     instance.unmount()

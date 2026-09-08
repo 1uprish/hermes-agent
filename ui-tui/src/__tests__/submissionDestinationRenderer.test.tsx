@@ -15,7 +15,7 @@ it('submits interpolated queued input only to its captured owner and removes it 
   const home = mkdtempSync(join(tmpdir(), 'ink-submit-'))
   vi.stubEnv('HERMES_HOME', home)
   resetUiState()
-  const info = { model: 'test', profile_name: 'alpha', skills: {}, tools: {} }
+  const info = { model: 'test', profile_name: 'alpha', stored_session_id: 'stored-owner', skills: {}, tools: {} }
   patchUiState({ sid: 'owner', info })
   let resolveShell!: (value: unknown) => void
   let resolveSubmit!: (value: unknown) => void
@@ -85,7 +85,7 @@ it('submits interpolated queued input only to its captured owner and removes it 
     expect(queue.queueRef.current).toContain(item)
     resolveSubmit({
       admission_id: item.submissionId,
-      target_session_id: 'owner',
+      target_session_id: 'stored-owner',
       target_profile_home: home,
       status: 'queued'
     })

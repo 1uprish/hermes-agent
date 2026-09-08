@@ -773,7 +773,10 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
     // Lifecycle authority is local to an owner epoch. Only attachment RPC
     // snapshots replace that epoch; delayed push events cannot reset it.
     const current = getUiState().info
-    const lifecycle = ['session.info', 'message.start', 'message.complete', 'error'].includes(ev.type)
+    const execution = (ev.payload ?? {}) as { execution_epoch?: string; execution_generation?: number }
+    const genericError = ev.type === 'error' &&
+      execution.execution_epoch === undefined && execution.execution_generation === undefined
+    const lifecycle = !genericError && ['session.info', 'message.start', 'message.complete', 'error'].includes(ev.type)
 
     if (lifecycle && current?.execution_generation !== undefined) {
       const incoming = (ev.payload ?? {}) as { execution_epoch?: string; execution_generation?: number }
@@ -1557,6 +1560,13 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       }
 
       case 'error':
+        // Build/RPC failures are not authority to settle a versioned turn.
+        if (genericError && current?.execution_generation !== undefined) {
+          sys(`error: ${String(ev.payload?.message || 'unknown error')}`)
+
+          return
+        }
+
         turnController.recordError()
         flashPet('failed')
 

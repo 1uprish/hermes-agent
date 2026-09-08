@@ -6,6 +6,7 @@ import { getUiState } from './uiStore.js'
 
 export interface SubmissionDestination {
   readonly sid: string | null
+  readonly storedSid?: string | null
   readonly profile: string
   readonly profileHome: string
 }
@@ -30,6 +31,7 @@ export function captureDestination(): SubmissionDestination {
 
   return Object.freeze({
     sid,
+    storedSid: info?.stored_session_id || null,
     profile: info?.profile_name || 'default',
     profileHome: canonicalHome(resolve(process.env.HERMES_HOME ?? join(homedir(), '.hermes')))
   })

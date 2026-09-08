@@ -171,13 +171,13 @@ it('keeps the submit destination across preprocessing and never mutates the newl
 
 it('retains a queued submission on ambiguous response and retries the exact identity until durable acknowledgement', async () => {
   resetUiState()
-  patchUiState({ sid: 'owner' })
+  patchUiState({ sid: 'owner', info: { model: 'test', tools: {}, skills: {}, stored_session_id: 'stored-owner' } })
   const settle = vi.fn()
   const item = { text: 'private', display: 'private', submissionId: 'stable-id', settle }
 
   const request = vi.fn().mockResolvedValueOnce({ status: 'streaming' }).mockResolvedValueOnce({
     admission_id: 'stable-id',
-    target_session_id: 'owner',
+    target_session_id: 'stored-owner',
     target_profile_home: captureDestination().profileHome,
     status: 'queued'
   })
@@ -193,6 +193,14 @@ it('retains a queued submission on ambiguous response and retries the exact iden
     { session_id: 'owner', text: 'private', submission_id: 'stable-id', queued: true }
   ])
   expect(settle).toHaveBeenLastCalledWith(true)
+  for (const stored_session_id of [undefined, 'wrong-target']) {
+    patchUiState({ info: { model: 'test', tools: {}, skills: {}, stored_session_id } })
+    request.mockResolvedValueOnce({ admission_id: 'stable-id', target_session_id: 'owner',
+      target_profile_home: captureDestination().profileHome, status: 'queued' })
+    submitPrompt(item.text, deps, true, undefined, { skipDetectDrop: true, queueItem: item })
+    await Promise.resolve()
+    expect(settle).toHaveBeenLastCalledWith(false)
+  }
 })
 
 describe('submissionCore.markSubmitting', () => {
