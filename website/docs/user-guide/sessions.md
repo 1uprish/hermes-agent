@@ -953,3 +953,12 @@ hermes sessions prune --older-than 30 --yes
 :::tip
 The database grows slowly (typical: 10-15 MB for hundreds of sessions) and session history powers `session_search` recall across past conversations, so auto-prune ships disabled. Enable it if you're running a heavy gateway/cron workload where `state.db` is meaningfully affecting performance (observed failure mode: 384 MB state.db with ~1000 sessions slowing down FTS5 inserts and `/resume` listing). Use `hermes sessions prune` for one-off cleanup without turning on the automatic sweep.
 :::
+
+
+### Attach to a local Desktop or serve owner
+
+On POSIX systems, `hermes --resume SESSION_ID` (or `--cli`) can attach a lightweight classic prompt_toolkit/Rich viewer to a live local Desktop/serve session. `hermes --tui --resume SESSION_ID` uses the existing Ink WebSocket transport. Both retain the owner’s provider and writer lease; the viewer does not need a separately configured provider.
+
+The classic attached viewer supports ordinary messages, `/steer TEXT`, `/queue TEXT`, `/interrupt`, `/replay`, `/approve REQUEST_ID`, `/deny REQUEST_ID`, and `/clarify REQUEST_ID ANSWER`. `/help` lists its limited command set; this is not a second full standalone CLI runtime. `/exit` only detaches this viewer. Interrupting deliberately affects the shared turn.
+
+Discovery stays within the selected profile and existing loopback listener. A private `runtime/session-attach` credential authorizes the handshake; public lease metadata contains no token. Missing credentials, unsupported owners, incorrect profile or changed leases fail closed. Windows private-file ACL discovery is not yet supported. Do not copy or publish discovery credentials or authenticated WebSocket URLs.
