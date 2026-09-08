@@ -364,6 +364,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
           const queued = queueKickoffIfSessionBusy({
             displayText,
             foregroundBusy: busyRef.current,
+            id: submissionId,
             sessionId,
             storedSessionId,
             text: message

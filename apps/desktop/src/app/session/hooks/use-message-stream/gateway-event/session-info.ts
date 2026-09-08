@@ -3,6 +3,7 @@ import { modelOptionsQueryKey } from '@/lib/model-options'
 import { reconcileApprovalModeForProfile } from '@/store/approval-mode'
 import { reconcileSessionCompacting } from '@/store/compaction'
 import { requestDesktopOnboardingForCredentialWarning } from '@/store/onboarding'
+import { reconcilePendingSubmissions } from '@/store/pending-submissions'
 import { followActiveSessionCwd } from '@/store/projects'
 import {
   $activeSessionId,
@@ -150,6 +151,11 @@ export function handleSessionInfoEvent(ctx: GatewayEventContext): boolean {
     // conversation already on screen — if so, re-bind the pane so every
     // subsequent isActiveEvent gate keeps matching (#93942 scenario B).
     const rebound = maybeRebindPaneToRebuiltRuntime(ctx)
+
+    if (sessionId) {
+      const storedId = payload?.stored_session_id ?? sessionStateByRuntimeIdRef.current.get(sessionId)?.storedSessionId ?? sessionId
+      reconcilePendingSubmissions(storedId, (payload as Record<string, unknown>)?.pending_submissions)
+    }
 
     // Apply session-scoped fields when the event targets the active
     // session, OR when it's a global broadcast and we have no session.

@@ -100,7 +100,7 @@ export function useComposerQueue({
   const [drainRetryTick, setDrainRetryTick] = useState(0)
 
   const beginQueuedEdit = (entry: QueuedPromptEntry) => {
-    if (!activeQueueSessionKey || queueEdit) {
+    if (!activeQueueSessionKey || queueEdit || entry.serverStatus) {
       return
     }
 
@@ -207,7 +207,7 @@ export function useComposerQueue({
 
       const drainQueueSessionKey = activeQueueSessionKey
       const drainRuntimeSessionId = sessionId ?? null
-      const entry = pickEntry(getQueuedPrompts(drainQueueSessionKey))
+      const entry = pickEntry(getQueuedPrompts(drainQueueSessionKey).filter(entry => !entry.serverStatus))
 
       if (!entry) {
         return false
@@ -252,7 +252,7 @@ export function useComposerQueue({
     (entries: QueuedPromptEntry[]) => {
       const skip = queueEditRef.current?.entryId
 
-      return skip ? entries.find(e => e.id !== skip) : entries[0]
+      return entries.find(e => !e.serverStatus && e.id !== skip)
     },
     [queueEditRef] // reads the edit id off a ref so the lock-holder always sees the latest
   )
