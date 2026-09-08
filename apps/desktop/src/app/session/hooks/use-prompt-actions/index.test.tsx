@@ -249,6 +249,35 @@ function Harness({
   return null
 }
 
+describe('durable submit acknowledgement', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it.each([
+    [{}, false],
+    [{ admission_id: 'other', status: 'queued' }, false],
+    [{ admission_id: 'entry-id', status: 'queued' }, true],
+    [{ admission_id: 'entry-id', status: 'started' }, true],
+    [{ admission_id: 'entry-id', status: 'terminal' }, true],
+    [{ admission_id: 'entry-id', status: 'unknown' }, false]
+  ])('requires the matching authoritative receipt: %j', async (receipt, accepted) => {
+    const requestGateway = vi.fn(async () => receipt as never)
+    let handle: HarnessHandle | null = null
+    await actRender(
+      <Harness onReady={h => (handle = h)} refreshSessions={async () => undefined} requestGateway={requestGateway} />
+    )
+    const options = { fromQueue: true, submission_id: 'entry-id' }
+    expect(await handle!.submitText('keep this input', options)).toBe(accepted)
+    expect(requestGateway).toHaveBeenCalledWith(
+      'prompt.submit',
+      expect.objectContaining({ submission_id: 'entry-id', queued: true }),
+      expect.any(Number)
+    )
+  })
+})
+
 describe('usePromptActions /title', () => {
   beforeEach(() => {
     setSessions(() => [sessionInfo()])

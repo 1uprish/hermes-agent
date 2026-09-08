@@ -221,12 +221,13 @@ export function useComposerQueue({
             attachments: entry.attachments,
             ...(entry.displayText ? { displayText: entry.displayText } : {}),
             fromQueue: true,
+            submission_id: entry.id,
             sessionId: drainRuntimeSessionId,
             storedSessionId: drainQueueSessionKey
           })
         )
 
-        if (accepted === false) {
+        if (accepted !== true) {
           return false
         }
 
