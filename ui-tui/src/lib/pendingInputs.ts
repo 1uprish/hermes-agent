@@ -45,7 +45,7 @@ export function pendingInputOwner(destination: SubmissionDestination): Submissio
   return current
 }
 
-// Only the authorized compression event calls this, never ordinary navigation.
+// Resume authorizes the source → successor mapping; navigation alone does not.
 export function migratePendingInputs(previous: SubmissionDestination, successorSid: string): void {
   if (!previous.sid || !successorSid || previous.sid === successorSid) {
     return
