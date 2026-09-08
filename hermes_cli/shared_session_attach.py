@@ -38,14 +38,15 @@ def _authorization(home: Path, endpoint: str) -> str:
     try:
         if os.name != "posix" or directory.resolve() != directory:
             raise ValueError("Private owner discovery is unavailable.")
+        uid = os.getuid()  # windows-footgun: ok — POSIX-only branch above
         info = directory.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
+        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or info.st_uid != uid:
             raise ValueError("Private owner discovery directory is not private.")
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         with os.fdopen(fd, "r", encoding="utf-8") as stream:
             info = os.fstat(stream.fileno())
             if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077
-                    or info.st_uid != os.getuid() or info.st_size > 65536):
+                    or info.st_uid != uid or info.st_size > 65536):
                 raise ValueError("Private owner credential is not private.")
             record = json.load(stream)
         if (record.get("shared_runtime_url") != endpoint or record.get("profile_home") != str(home)

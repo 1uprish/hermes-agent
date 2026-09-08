@@ -205,9 +205,10 @@ async def _run(url, session_id):
 
 
 def run_attached_cli(url, session_id):
+    from aiohttp import ClientError
     try:
         asyncio.run(_run(url, session_id))
-    except (OSError, TimeoutError, ValueError):
+    except (OSError, TimeoutError, ValueError, ClientError):
         # Transport exceptions may contain the credential-bearing URL.
         print("Could not attach to the live owner; its session was left intact.")
         raise SystemExit(1) from None
