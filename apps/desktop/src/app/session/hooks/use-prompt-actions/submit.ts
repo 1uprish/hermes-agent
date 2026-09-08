@@ -21,6 +21,7 @@ import {
 import { $hudMode } from '@/store/hud'
 import { clearNotifications, notify, notifyError } from '@/store/notifications'
 import { consumePendingCredentialWarning, requestDesktopOnboarding } from '@/store/onboarding'
+import { trackPendingSubmission } from '@/store/pending-submissions'
 import { isStoredTranscriptReadOnly } from '@/store/read-only-transcript'
 import {
   $sessions,
@@ -365,7 +366,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         }
       }
 
-      const optimisticId = `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const optimisticId = `user-${submissionId}`
 
       // What the bubble shows. A `/skill` send carries the whole expanded
       // skill body as its text — model-facing scaffolding — so the dispatcher
@@ -762,6 +763,8 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         rewriteOptimistic(liveSessionId)
         const text = buildContextText(syncedAttachments)
 
+        trackPendingSubmission(targetStoredSessionId ?? liveSessionId, { id: submissionId, text, displayText: options?.displayText })
+
         const submitParams = (targetId: string) => ({
           session_id: targetId,
           text,
@@ -836,6 +839,12 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
             releaseBusy()
 
             return false
+          }
+
+          if (result?.admission_id === submissionId) {
+            trackPendingSubmission(targetStoredSessionId ?? liveSessionId, { id: submissionId, text, displayText: options?.displayText, status: result.status })
+
+            if (result.status === 'queued') { dropOptimistic(sessionId) }
           }
         } catch (firstErr) {
           if (firstErr instanceof SessionRecoveryAborted) {

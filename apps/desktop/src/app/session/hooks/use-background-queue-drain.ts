@@ -112,7 +112,7 @@ export function useBackgroundQueueDrain({
         .then(async () => {
           const liveEntry = getQueuedPrompts(sessionKey).find(candidate => candidate.id === entry.id)
 
-          if (!liveEntry) {
+          if (!liveEntry || liveEntry.serverStatus) {
             return true
           }
 
@@ -181,7 +181,7 @@ export function useBackgroundQueueDrain({
         continue
       }
 
-      const entry = entries[0]
+      const entry = entries.find(candidate => !candidate.serverStatus)
 
       if (!entry || (drainFailuresRef.current.get(entry.id) ?? 0) >= MAX_AUTO_DRAIN_ATTEMPTS) {
         continue
