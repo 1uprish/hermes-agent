@@ -61,6 +61,15 @@ Within one authenticated gateway, resuming or activating a live session attaches
 
 ### Durable human prompt admission
 
+Native Desktop saves the prepared ID, exact text, attachment references, and
+captured destination in an origin-scoped private file under Electron userData,
+using the same atomic replacement mechanism as native connection settings.
+It waits for the main-process write acknowledgement before sending. An immediate
+Desktop process termination therefore retains the retry identity; this is not a
+power-loss or attachment-file backup guarantee. Browser-only clients retain a
+localStorage journal for reload recovery, without the native process-crash
+guarantee. Neither client automatically sends uncertain submissions on startup.
+
 In-process `prompt.submit` accepts an optional `submission_id`: a nonempty string
 of at most 200 characters, chosen once per human submission and retained on retry.
 The profile-scoped SQLite inbox commits before acknowledging input. Results include:

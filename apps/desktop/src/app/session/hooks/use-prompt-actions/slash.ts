@@ -208,7 +208,7 @@ export function useSlashCommand(deps: SlashCommandDeps) {
       const retryOptions = { ...options, retryText: rawCommand }
 
       try {
-        const prepared = readPreparedSubmission(preparedSubmissionKey(
+        const prepared = await readPreparedSubmission(preparedSubmissionKey(
           resolveComposerSessionKey(initialStoredId ?? initialRuntimeId, $sessions.get()),
           destination, rawCommand, options?.attachments ?? $composerAttachments.get(), retryOptions
         ))

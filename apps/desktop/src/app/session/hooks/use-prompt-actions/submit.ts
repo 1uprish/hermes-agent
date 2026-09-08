@@ -312,10 +312,11 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         captured, rawText, attachments, options
       )
 
-      let retained: ReturnType<typeof readPreparedSubmission>
+      let startingRouteToken = getRouteToken()
+      let retained: Awaited<ReturnType<typeof readPreparedSubmission>>
 
       try {
-        retained = readPreparedSubmission(retryKeyForTarget())
+        retained = await readPreparedSubmission(retryKeyForTarget())
 
         // A legacy send has no deduplication identity. After an ambiguous ACK
         // even an upgraded server cannot safely admit it under the saved ID.
@@ -344,8 +345,6 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
       // the routed target: an already-stale ref is not evidence that the user
       // switched chats while this submit was in flight.
       let startingSelectedStoredSessionId = selectedStoredSessionId
-
-      let startingRouteToken = getRouteToken()
 
       // Reason string (or null) for why the session context genuinely drifted
       // under this in-flight submit. sessionContextDrift ignores the churn a
@@ -839,7 +838,9 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         }
 
         const retryKey = retryKeyForTarget()
-        writePreparedSubmission(retryKey, prepared)
+        await writePreparedSubmission(retryKey, prepared)
+
+        if (sessionDriftReason()) {return abortForSessionSwitch(liveSessionId)}
 
         // On sleep/wake the gateway's in-memory session may have been cleared
         // while the desktop app still holds the old session ID. The shared
@@ -871,7 +872,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
                   }
 
                   prepared.legacyAttempted = true
-                  writePreparedSubmission(retryKey, prepared)
+                  await writePreparedSubmission(retryKey, prepared)
                   const { submission_id: _id, ...legacyParams } = params
 
                   const result = await requestGateway<{ admission_id?: string; status?: string }>(
@@ -947,7 +948,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
           throw submitErr
         }
 
-        removePreparedSubmission(retryKey)
+        await removePreparedSubmission(retryKey)
 
         if (usingComposerAttachments) {
           // A submit owns only the occurrences that actually reached the
