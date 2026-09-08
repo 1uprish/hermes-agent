@@ -465,7 +465,7 @@ def _persist_session_row_for_submit(rid, session):
     return None
 
 
-def _run_after_agent_ready(rid, sid, session, text, display_kind, hosted_terminal_callback):
+def _run_after_agent_ready(rid, sid, session, text, display_kind, hosted_terminal_callback, **turn_kwargs):
     """Turn thread body: patient wait for a deferred build (a slow build must not eat the
     accepted in-flight message), then run."""
     # The wait delivers the prompt when the still-running build completes, honors a cancel promptly, notices
@@ -495,7 +495,7 @@ def _run_after_agent_ready(rid, sid, session, text, display_kind, hosted_termina
             return
     _run_prompt_submit(
         rid, sid, session, text, display_kind=display_kind,
-        terminal_callback=hosted_terminal_callback)
+        terminal_callback=hosted_terminal_callback, **turn_kwargs)
 
 
 _TRUNCATION_PARAMS = (
@@ -580,6 +580,22 @@ def _(rid, params: dict) -> dict:
         if (t := current_transport()) is not None:
             _attach_session_transport(session, t)
             _cancel_ws_orphan_reap(sid)
+    if "submission_id" in params:
+        from tui_gateway.prompt_admission import AdmissionConflict, submit_admission
+        if internal_hosted_submit or turn_isolation or has_truncation:
+            return _err(rid, 4094, "durable admission requires an ordinary in-process human prompt")
+        if not session.get("running"):
+            if (err := _persist_session_row_for_submit(rid, session)) is not None:
+                return err
+        try:
+            return submit_admission(rid, sid, session, params, text, t or session.get("transport"))
+        except AdmissionConflict as exc:
+            return _err(rid, 4093, str(exc))
+        except (TypeError, ValueError) as exc:
+            return _err(rid, 4004, str(exc))
+        except Exception as exc:
+            logger.exception("durable prompt admission failed")
+            return _err(rid, 5071, f"prompt storage unavailable: {exc}")
     # Claim the turn against a possibly-running session (busy/queued reply, else fall
     # through once ``running`` is observed False).  The provider interrupt happens after
     # history_lock is released (a non-interruptible tool may hold it); if the old turn
@@ -635,6 +651,25 @@ def _(rid, params: dict) -> dict:
     session["_run_thread"] = run_thread
     run_thread.start()
     return _ok(rid, {"status": "streaming", **survivor_fields})
+
+
+@method("prompt.pending")
+def _(rid, params: dict) -> dict:
+    from tui_gateway.prompt_admission import admission_snapshot
+    session, err = _sess_nowait(params, rid)
+    return err if err else _ok(rid, admission_snapshot(session))
+
+
+@method("prompt.cancel")
+def _(rid, params: dict) -> dict:
+    from tui_gateway.prompt_admission import cancel_admission
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    try:
+        return _ok(rid, cancel_admission(session, params.get("admission_id")))
+    except ValueError as exc:
+        return _err(rid, 4004, str(exc))
 
 
 # ── attachments ─────────────────────────────────────────────────────────────

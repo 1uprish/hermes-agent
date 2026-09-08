@@ -751,7 +751,10 @@ def _run_prompt_submit(
     rid, sid: str, session: dict, text: Any, *, display_kind: str | None = None,
     display_metadata: dict | None = None, image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None,
-    terminal_callback: Callable[[dict[str, Any]], None] | None = None) -> bool:
+    terminal_callback: Callable[[dict[str, Any]], None] | None = None,
+    admission_id: str | None = None) -> bool:
+    from tui_gateway.prompt_execution import begin_execution, settle_execution, execution_snapshot
+
     admitted = _admit_prompt_turn(sid, session, text, image_paths, queued_prompt_generation)
     if admitted is None:
         return False
@@ -770,21 +773,44 @@ def _run_prompt_submit(
         "kind=%s chars=%s images=%d",
         sid, session.get("session_key") or "", getattr(agent, "session_id", "") or "",
         display_kind or "user", len(text) if isinstance(text, str) else "-", len(images))
-    _emit("message.start", sid)
+    try:
+        generation = begin_execution(session)
+    except BaseException:
+        _emit("session.info", sid, execution_snapshot(session))
+        raise
 
-    def run():
+    def settle(status):
+        settled = settle_execution(session, generation, status)
+        try:
+            if admission_id is not None:
+                from tui_gateway.prompt_admission import finish_admission
+                finish_admission(session, admission_id, status, generation)
+        finally:
+            if settled:
+                _emit("session.info", sid, execution_snapshot(session))
+        return settled
+
+    st = _TurnRun(
+        agent, session.pop("one_turn_model_restore", None), terminal_callback,
+        receipt_committed=terminal_callback is None)
+    execution_status = "error"
+    dispatch_followups = True
+
+    def run_turn():
+        nonlocal execution_status, dispatch_followups
         # RPC-dispatcher ContextVars do not follow onto this thread: rebind the transport
         # before any tool can commission a child (delegate_task captures it as authority).
         transport_token = bind_transport(session.get("transport"))
         runtime_session_token = _current_runtime_session_record.set(session)
-        st = _TurnRun(
-            session["agent"], session.pop("one_turn_model_restore", None), terminal_callback,
-            receipt_committed=terminal_callback is None)
-        st.marker_key = _record_turn_marker(session, text, auto_continue=terminal_callback is None)
         goal_followup = None
         try:
+            if admission_id is not None:
+                from tui_gateway.prompt_admission import bind_admission_generation
+                bind_admission_generation(session, admission_id, generation)
+            st.marker_key = _record_turn_marker(session, text, auto_continue=terminal_callback is None and admission_id is None)
             prepared = _prepare_turn_input(sid, session, st, text, images)
             if prepared is None:
+                dispatch_followups = False
                 if st.terminal_callback is not None and not st.receipt_attempted:
                     st.receipt_attempted = True
                     st.terminal_callback({
@@ -798,6 +824,7 @@ def _run_prompt_submit(
             status_note = _absorb_turn_result(
                 sid, session, st, text, display_kind, display_metadata)
             payload, raw, status = _complete_turn_payload(session, st, status_note, cols)
+            execution_status = status
             _emit("message.complete", sid, payload)
             goal_followup = _goal_followup_after_turn(sid, session, st.result, status, raw)
             if status == "complete":
@@ -806,15 +833,21 @@ def _run_prompt_submit(
             # structured control snapshot now so the Desktop card never paints the pre-judge turn count.
             _publish_session_control_snapshot(sid, session, only_if_present=True)
         except Exception as e:
+            execution_status = "error"
             _recover_turn_exception(sid, session, st, e)
         finally:
-            _finish_turn(sid, session, st)
-            _current_runtime_session_record.reset(runtime_session_token)
-            reset_transport(transport_token)
-            # A stale interim closure must not fire during a later turn.
-            st.agent.interim_assistant_callback = None
+            try:
+                _finish_turn(sid, session, st)
+            finally:
+                try:
+                    _current_runtime_session_record.reset(runtime_session_token)
+                finally:
+                    reset_transport(transport_token)
+            # A stale interim closure must not clear the newer turn's callback.
             with session["history_lock"]:
-                session["running"] = False
+                if session.get("_execution_generation") != generation:
+                    return None
+                st.agent.interim_assistant_callback = None
                 session["last_active"] = time.time()
                 if not st.error_retained:
                     _clear_inflight_turn(session)
@@ -839,19 +872,45 @@ def _run_prompt_submit(
                         session.pop("_active_turn_marker_key", None)
                     session.pop("_hosted_room_task", None)
             session.pop("_auto_continue_scheduled", None)
-            _emit_settled_session_info(sid, session, st.agent)
-        _run_post_turn_followups(rid, sid, session, st.result, goal_followup)
-    run_thread = threading.Thread(target=run, daemon=True)
-    with _sessions_lock:
-        registered = _sessions.get(sid)
-        can_start = not session.get("_closing") and (registered is None or registered is session)
-        if can_start:
-            session["_run_thread"] = run_thread
-            run_thread.start()
-    if not can_start:
-        with session["history_lock"]:
-            session["running"] = False
-    return can_start
+        return goal_followup
+
+    def run():
+        nonlocal execution_status
+        goal_followup = None
+        try:
+            goal_followup = run_turn()
+        except BaseException as exc:
+            execution_status = "interrupted" if isinstance(exc, (KeyboardInterrupt, SystemExit)) else "error"
+            try:
+                if session.get("_execution_generation") == generation:
+                    _recover_turn_exception(sid, session, st, exc)
+            except Exception:
+                logger.exception("outer turn recovery failed")
+        finally:
+            settled = settle(execution_status)
+        if settled:
+            try:
+                _emit_settled_session_info(sid, session, st.agent)
+            except Exception:
+                logger.exception("settled session projection failed")
+            if dispatch_followups:
+                _run_post_turn_followups(rid, sid, session, st.result, goal_followup)
+
+    try:
+        _emit("message.start", sid)
+        run_thread = threading.Thread(target=run, daemon=True)
+        with _sessions_lock:
+            registered = _sessions.get(sid)
+            can_start = not session.get("_closing") and (registered is None or registered is session)
+            if can_start:
+                session["_run_thread"] = run_thread
+                run_thread.start()
+        if not can_start:
+            settle("interrupted")
+        return can_start
+    except BaseException:
+        settle("error")
+        raise
 
 
 def register(server) -> None:
