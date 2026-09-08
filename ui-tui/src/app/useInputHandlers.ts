@@ -728,7 +728,7 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     }
 
     if (isAction(key, ch, 'k') && cRefs.queueRef.current.length && live.sid) {
-      const next = cActions.dequeue()
+      const next = cActions.dequeue(true)
 
       if (next) {
         cActions.setQueueEdit(null)
