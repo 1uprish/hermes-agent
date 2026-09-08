@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest'
+
 import { capturePromptResponseGuard, patchOverlayState } from '../app/overlayStore.js'
 import { patchUiState, resetUiState } from '../app/uiStore.js'
 
@@ -6,6 +7,7 @@ it('allows only the original prompt in the original execution to publish a respo
   resetUiState()
   const info = { model: 'test', tools: {}, skills: {}, execution_epoch: 'owner', execution_generation: 1 }
   patchUiState({ sid: 'original', info })
+
   for (const key of ['approval', 'clarify', 'sudo', 'secret'] as const) {
     const prompt = { requestId: 'same-id' } as any
     patchOverlayState({ [key]: prompt })
@@ -20,5 +22,6 @@ it('allows only the original prompt in the original execution to publish a respo
     expect(fresh()).toBe(false)
     patchOverlayState({ [key]: null })
   }
+
   resetUiState()
 })

@@ -583,7 +583,7 @@ describe('createSlashHandler', () => {
       createSlashHandler(ctx)('/compress')
       const current = { ...source, ...change }
       patchUiState({ info: current, busy: current.running, usage: { calls: 8, input: 8, output: 8, total: 16 } })
-      resolve({ info: source, messages: [{ role: 'assistant', content: 'old summary' }], usage: { total: 1 } })
+      resolve({ info: source, messages: [{ role: 'assistant', text: 'old summary' }], usage: { total: 1 } })
       await flush()
       expect(getUiState().info).toEqual(current)
       expect(getUiState().usage.total).toBe(16)
@@ -606,7 +606,7 @@ describe('createSlashHandler', () => {
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc: vi.fn(() => new Promise<any>(done => { resolve = done })) } })
     createSlashHandler(ctx)('/compress')
     patchUiState({ info: { ...source, model: 'refreshed' } })
-    resolve({ info: { execution_epoch: 'owner', execution_generation: 2 }, messages: [{ role: 'assistant', content: 'fresh summary' }] })
+    resolve({ info: { execution_epoch: 'owner', execution_generation: 2 }, messages: [{ role: 'assistant', text: 'fresh summary' }] })
     await flush()
     expect(getUiState().info).toMatchObject({ ...source, model: 'refreshed' })
     expect(ctx.transcript.setHistoryItems).toHaveBeenCalledWith(expect.arrayContaining([
