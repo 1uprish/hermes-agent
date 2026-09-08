@@ -39,6 +39,7 @@ import { resolveSessionProfile } from '../use-session-actions/utils'
 
 import { finalizeInterruptedMessages } from './rewind'
 import { registerRecoveredRuntime, singleFlightSessionResume, takeRecoveredRuntime } from './single-flight-resume'
+import { captureSubmissionDestination } from './submission-destination'
 import {
   acquireSubmitInFlight,
   type GatewayRequest,
@@ -69,7 +70,7 @@ interface SubmitPromptDeps {
   syncAttachmentsForSubmit: (
     sessionId: string,
     attachments: ComposerAttachment[],
-    options?: { updateComposerAttachments?: boolean }
+    options?: { updateComposerAttachments?: boolean; storedSessionId?: string | null; requestGateway?: GatewayRequest }
   ) => Promise<{ attachments: ComposerAttachment[]; sessionId: string }>
   updateSessionState: (
     sessionId: string,
@@ -109,7 +110,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
     getRuntimeIdForStoredSession,
     getRouteToken,
     onRuntimeRecovered,
-    requestGateway,
+    requestGateway: ambientRequestGateway,
     runtimeIdByStoredSessionIdRef,
     resumeStoredSession,
     selectedStoredSessionIdRef,
@@ -295,6 +296,12 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         targetStoredSessionId = routedStoredSessionId
         targetStartedInCurrentView = true
       }
+
+      const destination =
+        options?.destination ?? captureSubmissionDestination(targetStoredSessionId ?? sessionId, ambientRequestGateway)
+
+      const requestGateway = destination.requestGateway
+      const submissionId = options?.submission_id ?? crypto.randomUUID()
 
       let startingStoredSessionId = routedSessionNeedsResume
         ? routedStoredSessionId
@@ -728,7 +735,9 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         // plain text survived sleep/wake but images reported "session not
         // found". The attach path recovers and reports the live id back here.
         const attachResult = await syncAttachmentsForSubmit(sessionId, attachments, {
-          updateComposerAttachments: usingComposerAttachments
+          updateComposerAttachments: usingComposerAttachments,
+          storedSessionId: targetStoredSessionId,
+          requestGateway
         })
 
         const syncedAttachments = attachResult.attachments
@@ -756,7 +765,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
         const submitParams = (targetId: string) => ({
           session_id: targetId,
           text,
-          ...(options?.submission_id !== undefined && { submission_id: options.submission_id }),
+          submission_id: submissionId,
           ...(interrupted && { interrupted }),
           // Off-screen widget intent: the gateway types the persisted user
           // row display_kind=hidden so no client renders it as a bubble.
@@ -825,6 +834,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
           ) {
             dropOptimistic(sessionId)
             releaseBusy()
+
             return false
           }
         } catch (firstErr) {
@@ -915,7 +925,7 @@ export function useSubmitPrompt(deps: SubmitPromptDeps) {
       getRuntimeIdForStoredSession,
       getRouteToken,
       onRuntimeRecovered,
-      requestGateway,
+      ambientRequestGateway,
       runtimeIdByStoredSessionIdRef,
       resumeStoredSession,
       scope,
