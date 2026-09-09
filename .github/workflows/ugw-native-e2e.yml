@@ -57,6 +57,7 @@ jobs:
         timeout-minutes: 30
         env:
           UGW_JOB: ${{ matrix.os }}
+          UGW_ARTIFACT_DIR: ${{ github.workspace }}/ugw-native-logs
         run: |
           set -uo pipefail
           mkdir -p ugw-native-logs
