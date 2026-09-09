@@ -2440,6 +2440,7 @@ export interface Translations {
       stageAll: string
       viewAsTree: string
       viewAsList: string
+      viewAsSmart: string
       revert: string
       revertAll: string
       revertConfirm: string
