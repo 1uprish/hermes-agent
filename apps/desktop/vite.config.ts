@@ -101,9 +101,52 @@ const emojibaseAssets = () => ({
   }
 })
 
+// MacMan is a wrapped product with its own renderer. Its build must not boot,
+// import, or visually inherit the Hermes application tree. Electron still
+// expects dist/index.html, so choose the renderer at HTML transform time.
+const macManRendererEntry = () => ({
+  name: 'macman:renderer-entry',
+  enforce: 'pre' as const,
+  resolveId(id: string) {
+    if (process.env.VITE_MACMAN_DISTRIBUTION !== '1') {
+      return null
+    }
+
+    if (id === '/src/main.tsx' || id === path.resolve(__dirname, 'src/main.tsx')) {
+      return path.resolve(__dirname, 'src/macman/main.tsx')
+    }
+
+    return null
+  },
+  transformIndexHtml: {
+    order: 'pre' as const,
+    handler(html: string) {
+      if (process.env.VITE_MACMAN_DISTRIBUTION !== '1') {
+        return html
+      }
+
+      return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#1d1d1f" />
+    <link rel="icon" type="image/png" sizes="180x180" href="/apple-touch-icon.png" />
+    <title>MacMan</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/macman/main.tsx"></script>
+  </body>
+</html>`
+    }
+  }
+})
+
 export default defineConfig(({ command }) => ({
   base: './',
-  plugins: [react(), babel({ presets: [compilerPreset()] }), tailwindcss(), emojibaseAssets()],
+  plugins: [macManRendererEntry(), react(), babel({ presets: [compilerPreset()] }), tailwindcss(), emojibaseAssets()],
   css: {
     // Pin an explicit (empty) PostCSS config. Tailwind is handled entirely by
     // `@tailwindcss/vite`, so the renderer needs no PostCSS plugins — and

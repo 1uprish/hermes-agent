@@ -23,9 +23,10 @@ afterEach(cleanup)
 
 describe('standalone MacMan frontend', () => {
   it('opens on a setup dashboard that explains every access level and status', () => {
-    render(<MacManApp snapshot={snapshot} />)
+    const { container } = render(<MacManApp snapshot={snapshot} />)
 
     expect(screen.getByRole('heading', { name: 'Set up MacMan' })).toBeTruthy()
+    expect(container.querySelector('.mm-brand-logo')?.getAttribute('src')).toBe('./macman-mark-transparent.png')
     expect(screen.getByText('Required for computer control')).toBeTruthy()
     expect(screen.getByText('Accessibility')).toBeTruthy()
     expect(screen.getByText('Screen & System Audio Recording')).toBeTruthy()
@@ -74,5 +75,15 @@ describe('standalone MacMan frontend', () => {
     )
 
     expect(screen.getByText('Computer control ready')).toBeTruthy()
+  })
+
+  it('does not claim runtime health until the wrapper reports it', () => {
+    const { rerender } = render(<MacManApp initialView="advanced" snapshot={snapshot} />)
+
+    expect(screen.getByText('Not connected')).toBeTruthy()
+    expect(screen.queryByText('Healthy')).toBeNull()
+
+    rerender(<MacManApp initialView="advanced" snapshot={{ ...snapshot, wrapper: 'connected' }} />)
+    expect(screen.getByText('Connected')).toBeTruthy()
   })
 })
