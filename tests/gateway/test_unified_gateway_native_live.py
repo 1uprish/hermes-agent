@@ -165,8 +165,8 @@ def daemon(home, env, log_name, *, fixture=None, expect_ready=True):
                 time.sleep(.1)
             if expect_ready:
                 log.flush(); log.seek(0)
-                gateway_log = home / 'logs' / 'gateway.log'
-                detail = gateway_log.read_text(encoding='utf-8', errors='replace')[-8000:] if gateway_log.exists() else ''
+                detail = {name: (home / 'logs' / name).read_text(encoding='utf-8', errors='replace')[-6000:]
+                          for name in ('gateway.log', 'stacks.txt') if (home / 'logs' / name).exists()}
                 assert desc.get('state') == 'ready', (desc, proc.poll(), log.read()[-3000:], detail)
             yield proc, desc, log
         finally:
@@ -396,7 +396,9 @@ def test_native_gateway_runtime_live(harness):
         assert control(home, 'identify')['instance_id'] == desc['instance_id']
         return code
 
-    with daemon(home, env, 'first.log') as (owner, desc, _):
+    # Same ordinary gateway.run entry; the wrapper only dumps every thread's stack to
+    # logs/stacks.txt after 60s so a readiness stall on a native runner names its frame.
+    with daemon(home, {**env, 'UGW_STACK_DUMP_AFTER': '60'}, 'first.log', fixture='stack_dump_daemon.py') as (owner, desc, _):
         receipt['first_pid'] = owner.pid
         sid = asyncio.run(discovery_attach_and_turn(desc))
         asyncio.run(two_clients_fifo(desc, sid))
