@@ -17,8 +17,9 @@ config yet, or a tool crashed).
 
 With --fail-on-new, ty diagnostics whose rule is listed and that are NEW vs
 base make the tool exit 1 (for a blocking CI gate); without it the tool always
-exits 0 (advisory). When the base ty report is unavailable the gate is skipped
-(exit 0) so a missing base can never block a PR.
+exits 0 (advisory). In enforced mode a missing/empty base or head ty report
+exits 2: "comparison unavailable" is not "no new diagnostics", and a gate that
+passes without evidence is no gate.
 """
 
 from __future__ import annotations
@@ -198,6 +199,7 @@ def main() -> int:
 
     base_ruff_avail = args.base_ruff.exists() and args.base_ruff.stat().st_size > 0
     base_ty_avail = args.base_ty.exists() and args.base_ty.stat().st_size > 0
+    head_ty_avail = args.head_ty.exists() and args.head_ty.stat().st_size > 0
 
     buf: list[str] = []
     buf.append(f"# 🔎 Lint report: `{args.head_ref}` vs `{args.base_ref}`\n")
@@ -216,13 +218,14 @@ def main() -> int:
     fail_rules = [r.strip() for r in args.fail_on_new.split(",") if r.strip()]
     if not fail_rules:
         return 0
-    if not base_ty_avail:
+    if not (base_ty_avail and head_ty_avail):
+        missing = "base" if not base_ty_avail else "head"
         print(
-            "gate skipped: base ty report unavailable, "
-            "a missing base never blocks a PR",
+            f"GATE UNAVAILABLE: {missing} ty report missing or empty; cannot "
+            f"establish that HEAD adds no {','.join(fail_rules)} diagnostics",
             file=sys.stderr,
         )
-        return 0
+        return 2
     new_ty, _, _ = _diff(base_ty, head_ty)
     gated = [d for d in new_ty if d["rule"] in fail_rules]
     if not gated:

@@ -46,10 +46,18 @@ def _run(monkeypatch, tmp_path, base_entries, head_entries, *extra):
     return _load().main()
 
 
-def test_new_gated_rule_fails(monkeypatch, tmp_path):
+def test_new_gated_rule_fails_and_missing_evidence_never_passes(monkeypatch, tmp_path):
     entry = _ty_entry("invalid-method-override", path="p.py", message="bad override")
     assert _run(monkeypatch, tmp_path, [], [entry],
                 "--fail-on-new", "invalid-method-override") == 1
+    # A crashed/empty base report is "comparison unavailable", not "clean":
+    # enforced mode must not certify the head (exit 2, distinct from a real hit).
+    nobase = tmp_path / "nobase"
+    nobase.mkdir()
+    assert _run(monkeypatch, nobase, None, [entry],
+                "--fail-on-new", "invalid-method-override") == 2
+    # Advisory mode is unaffected by the missing base.
+    assert _run(monkeypatch, nobase, None, [entry]) == 0
 
 
 def test_preexisting_gated_and_new_ungated_pass(monkeypatch, tmp_path):
