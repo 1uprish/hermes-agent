@@ -1,0 +1,72 @@
+# TEMPORARY — unified gateway native proof; never merges
+#
+# Native Windows + macOS live proof of the unified gateway runtime on real GitHub
+# runners. Fires only on pushes to wine2e/ugw-native-** working branches.
+name: Unified gateway native E2E (temporary)
+
+on:
+  push:
+    branches:
+      - "wine2e/ugw-native-**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ugw-native-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: unified gateway live E2E (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        timeout-minutes: 5
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set up Python 3.11
+        uses: ./.github/actions/retry
+        timeout-minutes: 10
+        with:
+          command: uv python install 3.11
+
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        timeout-minutes: 25
+        with:
+          command: uv sync --locked --python 3.11 --extra dev --extra messaging
+
+      - name: Run unified gateway native live suite
+        shell: bash
+        timeout-minutes: 30
+        env:
+          UGW_JOB: ${{ matrix.os }}
+        run: |
+          set -uo pipefail
+          mkdir -p ugw-native-logs
+          uv run --no-sync python scripts/ci/ugw_native_shim.py
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        timeout-minutes: 5
+        with:
+          name: ugw-native-logs-${{ matrix.os }}
+          path: ugw-native-logs/
+          if-no-files-found: warn
