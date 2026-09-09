@@ -14,6 +14,7 @@ FILES = [
     "tests/gateway/test_unified_gateway_native_live.py",
     "tests/gateway/test_api_crash_recovery.py",
     "tests/gateway/test_managed_worker_launch.py",
+    "tests/gateway/test_managed_worker_trampoline.py",
     "tests/gateway/test_used_delete_restart.py",
     "tests/hermes_cli/test_safe_mode.py",
     "tests/gateway/test_session_policy.py",
