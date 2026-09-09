@@ -19,6 +19,7 @@ FILES = [
     "tests/hermes_cli/test_safe_mode.py",
     "tests/gateway/test_session_policy.py",
     "tests/gateway/test_runtime_bootstrap.py",
+    "tests/hermes_cli/test_gateway_runtime_home_identity.py",
 ]
 
 
