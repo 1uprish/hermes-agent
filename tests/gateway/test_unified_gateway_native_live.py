@@ -174,7 +174,7 @@ def daemon(home, env, log_name, *, fixture=None, expect_ready=True):
                     artifacts.mkdir(parents=True, exist_ok=True)
                     (artifacts / f'stacks-{proc.pid}.txt').write_text(stacks.read_text(encoding='utf-8', errors='replace'), encoding='utf-8')
                     detail['stacks.txt'] = stacks.read_text(encoding='utf-8', errors='replace')
-                assert desc.get('state') == 'ready', (desc, proc.poll(), log.read()[-3000:], detail)
+                assert desc.get('state') == 'ready', (json.dumps(desc, default=str), proc.poll(), log.read()[-3000:], detail)
             yield proc, desc, log
         finally:
             if proc.poll() is None:
