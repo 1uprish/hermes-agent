@@ -27,6 +27,11 @@ def _configured_budget_block() -> dict:
     as a read-only compatibility fallback so existing installations do not silently
     lose their MCP threshold after upgrading. Goes through ``load_config_readonly``
     (the sanctioned path; raw config.yaml parsing outside owner modules is test-guarded).
+
+    ``tool_output`` ships in DEFAULT_CONFIG, so the loader's deep-merge means the
+    primary block always exists with default values — a whole-block "primary else
+    legacy" check would never fall back. Fall back PER KEY: a merged-in default
+    must not shadow an explicit legacy setting.
     """
     try:
         from hermes_cli.config import load_config_readonly
@@ -34,10 +39,18 @@ def _configured_budget_block() -> dict:
         if not isinstance(data, dict):
             return {}
         primary = data.get("tool_output")
-        if isinstance(primary, dict):
-            return primary
+        primary = primary if isinstance(primary, dict) else {}
         legacy = data.get("tool_budget")
-        return legacy if isinstance(legacy, dict) else {}
+        legacy = legacy if isinstance(legacy, dict) else {}
+        if not legacy:
+            return primary
+        merged = dict(primary)
+        if (merged.get("mcp_result_size_chars") == DEFAULT_MCP_RESULT_SIZE_CHARS
+                and "mcp_result_size_chars" in legacy):
+            merged["mcp_result_size_chars"] = legacy["mcp_result_size_chars"]
+        if not merged.get("tool_overrides") and "tool_overrides" in legacy:
+            merged["tool_overrides"] = legacy["tool_overrides"]
+        return merged
     except Exception:
         return {}
 

@@ -278,6 +278,22 @@ class TestConfiguredToolOverrides:
         cfg = budget_for_context_window(None)
         assert cfg.resolve_threshold("mcp_x_y") == 50_000
 
+    def test_legacy_tool_budget_key_still_read_per_key(self, tmp_path, monkeypatch):
+        """tool_output ships in DEFAULT_CONFIG so the merged block always exists;
+        an explicit legacy tool_budget value must still win over merged defaults."""
+        (tmp_path / "config.yaml").write_text(
+            "tool_budget:\n"
+            "  mcp_result_size_chars: 40000\n"
+            "  tool_overrides:\n"
+            "    web_search: 15000\n"
+        )
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        cfg = budget_for_context_window(None)
+
+        assert cfg.resolve_threshold("mcp_x_y") == 40_000
+        assert cfg.resolve_threshold("web_search") == 15_000
+
     def test_scaled_small_window_caps_mcp_threshold(self, tmp_path, monkeypatch):
         """A tiny model's scaled default_result_size caps even the MCP value."""
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))  # no config.yaml
