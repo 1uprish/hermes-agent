@@ -144,7 +144,12 @@ def planned_stop(home, proc):
     marker = {'target_pid': proc.pid, 'target_start_time': process_start_time(proc.pid),
               'stopper_pid': os.getpid(), 'written_at': datetime.now(timezone.utc).isoformat()}
     (home / '.gateway-planned-stop.json').write_text(json.dumps(marker), encoding='utf-8')
-    return proc.wait(timeout=90)
+    try:
+        return proc.wait(timeout=90)
+    except subprocess.TimeoutExpired:
+        detail = (home / 'logs' / 'gateway.log').read_text(encoding='utf-8', errors='replace')[-6000:]
+        raise AssertionError(('planned stop did not exit within 90s', marker,
+                              (home / '.gateway-planned-stop.json').exists(), detail))
 
 
 @contextmanager
@@ -250,7 +255,13 @@ def harness(tmp_path, peer):
         "def record(kind, **fields):\n"
         "    with open(AUDIT, 'a', encoding='utf-8') as f:\n"
         "        f.write(json.dumps({'kind': kind, 'pid': os.getpid(), **fields}) + '\\n')\n"
-        "record('start', ppid=os.getppid(), argv=list(sys.orig_argv))\n"
+        "def ancestors():\n"
+        "    try:\n"
+        "        import psutil\n"
+        "        return [(p.pid, p.name()) for p in psutil.Process().parents()[:4]]\n"
+        "    except Exception as exc:\n"
+        "        return [repr(exc)]\n"
+        "record('start', ppid=os.getppid(), argv=list(sys.orig_argv), executable=sys.executable, ancestors=ancestors())\n"
         "def witness(event, args):\n"
         "    if event == 'sqlite3.connect':\n"
         "        record('sqlite', target=str(args[0]))\n"
@@ -358,7 +369,11 @@ def test_native_gateway_runtime_live(harness):
             proc.kill(); out, err = proc.communicate(timeout=10)
             raise AssertionError(('safe-mode CLI timed out', out, err))
         out, err = out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
-        assert proc.returncode == 0, (proc.returncode, out, err)
+        starts = [r for r in records(audit) if r['kind'] == 'start' and 'agent.managed_worker' in ' '.join(r['argv'])]
+        evidence = {'owner_pid': owner.pid, 'worker_starts': starts,
+                    'worker_executions': query(home, 'SELECT execution_id,status FROM worker_executions'),
+                    'gateway_log': (home / 'logs' / 'gateway.log').read_text(encoding='utf-8', errors='replace')[-4000:]}
+        assert proc.returncode == 0, (proc.returncode, out, err, json.dumps(evidence, indent=1))
         assert 'NATIVE_ACK_SAFE_PROBE_NATIVE' in out + err, (out, err)
         sid = re.search(r'Session: (\S+)', err).group(1)
         assert query(home, 'SELECT status FROM session_admissions WHERE target_session_id=?', (sid,)) == [('terminal',)]
