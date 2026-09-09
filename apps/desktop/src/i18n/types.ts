@@ -467,6 +467,7 @@ export interface Translations {
       labelRequired: string
       originField: string
       originPlaceholder: string
+      originPlaceholderCheckout: string
       originInvalid: string
       identifierTypeField: string
       identifierTypes: Record<'email' | 'phone' | 'username', string>
