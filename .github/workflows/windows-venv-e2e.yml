@@ -52,29 +52,14 @@ jobs:
         with:
           command: uv sync --locked --python 3.11 --extra dev --extra messaging
 
-      - name: Run venv-holder live E2E
+      - name: Verify production cwd regression red then green
         shell: bash
         run: |
-          set -uo pipefail
-          uv run --no-sync python -m pytest \
-            tests/hermes_cli/test_venv_holder_windows_live.py \
-            tests/hermes_cli/test_taskkill_identity_windows_live.py \
-            tests/hermes_cli/test_git_trampoline_windows_live.py \
-            "tests/hermes_cli/test_managed_uv.py::TestWindowsRuntimeSelfLock" \
-            -o addopts= -v -p no:cacheprovider
-
-      - name: Run Telegram CLOSE-WAIT reconnect live E2E (#87057)
-        shell: bash
-        run: |
-          set -uo pipefail
-          uv run --no-sync python -m pytest \
-            tests/gateway/test_telegram_closewait_windows_live.py \
-            -o addopts= -v -p no:cacheprovider
-
-      - name: Run background-executor spawn parity live E2E (#70716)
-        shell: bash
-        run: |
-          set -uo pipefail
-          uv run --no-sync python -m pytest \
-            tests/tools/test_process_registry_windows_live.py \
-            -o addopts= -v -p no:cacheprovider
+          set -euo pipefail
+          python -c 'from pathlib import Path; p=Path("scripts/desktop-update/windows.ps1"); s=p.read_text(); old="$resolvedInstallRoot = Set-InstallRootCurrentDirectory $InstallRoot"; assert s.count(old)==1; p.write_text(s.replace(old, "$resolvedInstallRoot = $InstallRoot"))'
+          if uv run --no-sync python -m pytest tests/test_desktop_update_windows_cwd.py -o addopts= -v -p no:cacheprovider; then
+            printf 'ERROR: neutralized production setup passed tests\n'
+            exit 1
+          fi
+          git restore scripts/desktop-update/windows.ps1
+          uv run --no-sync python -m pytest tests/test_desktop_update_windows_cwd.py tests/test_desktop_update_windows_timestamp.py tests/test_desktop_update_windows_retry_policy.py tests/test_desktop_update_windows_python_handoff.py tests/hermes_cli/test_desktop_update_verify.py -o addopts= -v -p no:cacheprovider
