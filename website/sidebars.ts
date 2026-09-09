@@ -350,6 +350,7 @@ const sidebars: SidebarsConfig = {
                   key: 'skills-optional-creative',
                   collapsed: true,
                   items: [
+                    'user-guide/skills/optional/creative/creative-archify',
                     'user-guide/skills/optional/creative/creative-ascii-art',
                     'user-guide/skills/optional/creative/creative-audiocraft-audio-generation',
                     'user-guide/skills/optional/creative/creative-baoyu-article-illustrator',
