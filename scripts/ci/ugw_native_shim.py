@@ -43,7 +43,9 @@ def main() -> int:
     failed = counts.get("failed", 0) + counts.get("error", 0) + counts.get("errors", 0)
     # Show failures inline (bounded) so the run page itself names the defect.
     tail = text[-12000:]
-    sys.stdout.write(tail + "\n")
+    # The runner console is cp1252: a replaced byte (U+FFFD) in the tail must not kill the shim.
+    sys.stdout.buffer.write((tail + "\n").encode("utf-8", "replace"))
+    sys.stdout.flush()
     print(f"RESULT {job}: exit={proc.returncode} passed={counts.get('passed', 0)} failed={failed}", flush=True)
     return proc.returncode
 
