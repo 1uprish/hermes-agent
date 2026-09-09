@@ -17,6 +17,7 @@ FILES = [
     "tests/gateway/test_used_delete_restart.py",
     "tests/hermes_cli/test_safe_mode.py",
     "tests/gateway/test_session_policy.py",
+    "tests/gateway/test_runtime_bootstrap.py",
 ]
 
 
