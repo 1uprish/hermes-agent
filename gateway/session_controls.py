@@ -43,6 +43,7 @@ class AuthorityConnection:
                     'setup.status': self.setup_status, 'setup.runtime_check': self.setup_runtime_check,
                     'session.resume': self.resume, 'prompt.submit': self.submit,
                     'prompt.receipt': self.receipt, 'prompt.cancel': self.cancel,
+                    'prompt.resolve_unknown': self.resolve_unknown,
                     'session.interrupt': self.interrupt, 'session.events.since': self.events_since,
                     'approval.respond': self.respond, 'clarify.respond': self.respond_clarify}
         try:
@@ -202,13 +203,25 @@ class AuthorityConnection:
 
     async def mutate(self, ref, params):
         from gateway.session_mutations import mutate_session
-        return await mutate_session(self.authority, self.actor, ref, params)
+        result = await mutate_session(self.authority, self.actor, ref, params)
+        # The branching viewer navigates straight into its new child; attach it
+        # here (create parity) so the first submit is not refused as a stranger.
+        child = result.get('branched_session_id') if isinstance(result, dict) else None
+        if child and child not in self.subscriptions:
+            await self.resume(SessionRef(ref.profile_id, child), {})
+        return result
 
     async def receipt(self, ref, params):
         return asdict(await self.authority.receipt(self.actor, ref, params.get('admission_id')))
 
     async def cancel(self, ref, params):
         return asdict(await self.authority.cancel_queued(self.actor, ref, params.get('admission_id')))
+
+    async def resolve_unknown(self, ref, params):
+        if set(params) != {'session_id', 'admission_id', 'execution_generation'}:
+            raise RuntimeStoreError('invalid_params')
+        return asdict(await self.authority.resolve_unknown(
+            self.actor, ref, params['admission_id'], params['execution_generation']))
 
     async def interrupt(self, ref, params):
         from gateway.session_managed_worker import interrupt_managed

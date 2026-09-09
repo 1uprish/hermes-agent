@@ -55,3 +55,42 @@ test('pending resume and live updates share the existing queue projection', () =
   protocol.event(cleared)
   expect(cleared.payload).toHaveProperty('pending_submissions', [])
 })
+
+test('composer branch and model switch become canonical prepared mutations with identity retained', () => {
+  const protocol = new CanonicalDesktopProtocol()
+  protocol.result('session.resume', { session_id: 's' }, { session_id: 's', revision: 4, execution_generation: 9 })
+  const branch = protocol.prepare('session.branch', { session_id: 's' })
+  expect(protocol.wire('session.branch')).toBe('session.mutate')
+  expect(branch).toEqual({ session_id: 's', request_id: expect.any(String), expected_revision: 4, expected_generation: 9, operation: 'branch', payload: {} })
+  expect(protocol.prepare('session.branch', { session_id: 's' })).toEqual(branch)
+  const branched = protocol.result('session.branch', branch, { session_id: 's', revision: 5, operation: 'branch', branched_session_id: 'child', copied_messages: 6 })
+  expect(branched).toMatchObject({ session_id: 'child', stored_session_id: 'child', parent_session_id: 's' })
+  expect(protocol.prepare('session.branch', { session_id: 's' }).request_id).not.toBe(branch.request_id)
+
+  const model = protocol.prepare('slash.exec', { session_id: 's', command: 'model switched' })
+  expect(protocol.wire('slash.exec', model)).toBe('session.mutate')
+  expect(model).toMatchObject({ session_id: 's', expected_revision: 5, operation: 'model', payload: { model: 'switched' } })
+  expect(protocol.result('slash.exec', model, { session_id: 's', revision: 6, operation: 'model', model: 'switched', provider: 'custom' })).toMatchObject({ type: 'exec', output: expect.stringContaining('switched') })
+  expect(protocol.wire('slash.exec', protocol.prepare('slash.exec', { session_id: 's', command: 'help' }))).toBe('slash.exec')
+})
+
+test('a session.info fanout after a turn refreshes the CAS revision the next mutation presents', () => {
+  const protocol = new CanonicalDesktopProtocol()
+  protocol.result('session.resume', { session_id: 's' }, { session_id: 's', revision: 2, execution_generation: 1 })
+  protocol.event({ type: 'session.info', session_id: 's', payload: { pending: [], running: false, execution_generation: 2, revision: 5 } })
+  expect(protocol.prepare('session.branch', { session_id: 's' })).toMatchObject({ expected_revision: 5, expected_generation: 2 })
+})
+
+test('acknowledging a turn lost across a restart presents the unknown row\'s own generation', () => {
+  const protocol = new CanonicalDesktopProtocol()
+  protocol.result('session.resume', { session_id: 's' }, { session_id: 's', stored_session_id: 's', execution_generation: 9, revision: 2,
+    pending: [{ admission_id: 'lost', status: 'unknown', execution_generation: 4, text: 'LOST' }, { admission_id: 'next', status: 'queued', execution_generation: null, text: 'NEXT' }] })
+  expect(protocol.prepare('prompt.resolve_unknown', { session_id: 's', admission_id: 'lost' }))
+    .toEqual({ session_id: 's', admission_id: 'lost', execution_generation: 4 })
+  expect(() => protocol.prepare('prompt.resolve_unknown', { session_id: 's', admission_id: 'next' })).toThrow('unknown')
+  const receipt = protocol.result('prompt.resolve_unknown', { session_id: 's', admission_id: 'lost', execution_generation: 4 },
+    { admission_id: 'lost', ref: { session_id: 's', profile_id: '/tmp/profile' }, status: 'terminal', outcome: 'interrupted' })
+  expect(receipt).toMatchObject({ admission_id: 'lost', session_id: 's', status: 'terminal' })
+  protocol.event({ type: 'session.info', session_id: 's', payload: { pending: [{ admission_id: 'next', status: 'started', execution_generation: 10, text: 'NEXT' }], execution_generation: 10 } })
+  expect(() => protocol.prepare('prompt.resolve_unknown', { session_id: 's', admission_id: 'lost' })).toThrow('unknown')
+})
