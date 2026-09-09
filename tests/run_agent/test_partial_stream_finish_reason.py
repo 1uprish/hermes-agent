@@ -1038,3 +1038,61 @@ class TestMergedFinishChunkSurvivesSSEGuard:
         assert response.id != PARTIAL_STREAM_STUB_ID
         assert response.choices[0].finish_reason == "stop"
         assert response.choices[0].message.content == "Hello."
+
+
+class TestContextOverflowPartialNotSeeded:
+    """#106260: a stream that delivered text and then died on a CONTEXT-OVERFLOW error must
+    not become a continuation stub — the recovered text would make every later request
+    larger than the one that just failed. The error is re-raised so the loop's normal
+    context-length recovery (compress + retry / #98722 clean-session exit) owns it."""
+
+    @patch("run_agent.AIAgent._create_request_openai_client")
+    @patch("run_agent.AIAgent._close_request_openai_client")
+    def test_context_overflow_partial_reraises_instead_of_stub(self, _mock_close, mock_create, monkeypatch):
+        def _overflowing_stream():
+            yield _make_stream_chunk(content="Here's my long partial answer ...")
+            raise RuntimeError("Context length exceeded: max compression attempts (3) reached.")
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = lambda *a, **kw: _overflowing_stream()
+        mock_create.return_value = mock_client
+
+        agent = _make_agent()
+        agent._current_streamed_assistant_text = "Here's my long partial answer ..."
+        monkeypatch.setenv("HERMES_STREAM_RETRIES", "0")
+
+        with pytest.raises(RuntimeError, match="Context length exceeded"):
+            agent._interruptible_streaming_api_call({})
+
+    def test_overflow_partial_never_grows_the_next_request(self, loop_agent):
+        """Loop-level invariant: with compression disabled and a provider that overflows on
+        every call, the overflow after partial delivery must end the turn as failed without
+        any request larger than the first — the death spiral is the growth itself."""
+        sizes = []
+        partial = " ".join(f"w{i * 7919 % 100003}" for i in range(400))
+
+        def _create(*_a, **kw):
+            sizes.append(sum(len(str(m.get("content") or "")) for m in kw.get("messages") or []))
+
+            def _gen():
+                yield _make_stream_chunk(content=partial)
+                raise RuntimeError("Context length exceeded: max compression attempts (3) reached.")
+            return _gen()
+
+        loop_agent.stream_delta_callback = lambda _t: None  # real stream consumer -> streaming path
+        loop_agent.client.chat.completions.create.side_effect = _create
+        with (
+            patch("run_agent.AIAgent._create_request_openai_client", return_value=loop_agent.client),
+            patch("run_agent.AIAgent._close_request_openai_client"),
+            patch.object(loop_agent, "_persist_session"),
+            patch.object(loop_agent, "_save_trajectory"),
+            patch.object(loop_agent, "_cleanup_task_resources"),
+        ):
+            result = loop_agent.run_conversation("ask me something")
+
+        assert result.get("failed") is True
+        assert all(s <= sizes[0] for s in sizes), f"request sizes grew across attempts: {sizes}"
+        assert not any(
+            m.get("role") == "assistant" and partial[:30] in str(m.get("content") or "")
+            for m in result["messages"]
+        ), "recovered partial must not be seeded into the transcript after a context overflow"
