@@ -147,6 +147,31 @@ test('MacMan owns permission onboarding and starts one embedded generation only 
   assert.deepEqual(fake.events.slice(-4), ['driver:shutdown', 'driver:destroy', 'host:stop', 'host:destroy'])
 })
 
+test('an explicit user retry can reopen Screen Recording settings without starting duplicate hosts', async () => {
+  const fake = fakeDependencies()
+  const controller = createMacManCuaHostController(fake.dependencies)
+
+  await controller.requestPermissionsAndStart()
+  await controller.requestPermissionsFromUserAction()
+
+  assert.equal(
+    fake.events.filter(event => event === 'permissions:open-screen-settings').length,
+    2,
+    'a deliberate retry should reopen Settings even though background polling never does'
+  )
+  assert.equal(fake.events.includes('host:create'), false)
+
+  fake.grantPermissions()
+  const [first, concurrent] = await Promise.all([
+    controller.requestPermissionsFromUserAction(),
+    controller.requestPermissionsFromUserAction()
+  ])
+
+  assert.equal(first.state, 'running')
+  assert.deepEqual(concurrent, first)
+  assert.equal(fake.events.filter(event => event.startsWith('host:start:')).length, 1)
+})
+
 test('MacMan fails closed and tears down a daemon that does not report the host identity', async () => {
   const fake = fakeDependencies({
     requestPermissions: () => ({ accessibility: true, screenRecording: true }),
