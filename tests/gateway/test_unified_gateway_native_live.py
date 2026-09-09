@@ -139,9 +139,13 @@ def hard_kill(proc):
     proc.wait(timeout=30)
 
 
-def planned_stop(home, proc):
-    """The ``hermes gateway stop`` contract: marker first, then the owner drains itself."""
-    marker = {'target_pid': proc.pid, 'target_start_time': process_start_time(proc.pid),
+def planned_stop(home, proc, desc):
+    """The ``hermes gateway stop`` contract: marker first, then the owner drains itself.
+
+    The marker names the gateway's own pid from ``identify`` (what the PID file carries), not
+    the Popen handle: a Windows uv venv ``python.exe`` is a trampoline whose pid differs."""
+    pid = desc['pid']
+    marker = {'target_pid': pid, 'target_start_time': process_start_time(pid),
               'stopper_pid': os.getpid(), 'written_at': datetime.now(timezone.utc).isoformat()}
     (home / '.gateway-planned-stop.json').write_text(json.dumps(marker), encoding='utf-8')
     try:
@@ -373,43 +377,6 @@ def test_native_gateway_runtime_live(harness):
             assert query(home, 'SELECT 1 FROM sessions WHERE id=?', (sid,)) == [(1,)]
         return child
 
-    def safe_mode_cli_worker(owner):
-        command = [sys.executable, '-m', 'hermes_cli.main', 'chat', '--safe-mode', '--provider', 'custom',
-                   '--base-url', url, '--model', 'safe-fixture', '--api-key', 'fixture', '-Q', '-q', 'SAFE_PROBE_NATIVE']
-        proc = subprocess.Popen(command, cwd=harness['work'], env=env, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        try:
-            out, err = proc.communicate(timeout=180)
-        except subprocess.TimeoutExpired:
-            proc.kill(); out, err = proc.communicate(timeout=10)
-            raise AssertionError(('safe-mode CLI timed out', out, err))
-        out, err = out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
-        starts = [r for r in records(audit) if r['kind'] == 'start' and 'agent.managed_worker' in ' '.join(r['argv'])]
-        evidence = {'owner_pid': owner.pid, 'worker_starts': starts,
-                    'worker_errors': [r for r in records(audit) if r['kind'] == 'worker_error'],
-                    'worker_executions': query(home, 'SELECT execution_id,status FROM worker_executions'),
-                    'gateway_log': (home / 'logs' / 'gateway.log').read_text(encoding='utf-8', errors='replace')[-4000:]}
-        assert proc.returncode == 0, (proc.returncode, out, err, json.dumps(evidence, indent=1))
-        assert 'NATIVE_ACK_SAFE_PROBE_NATIVE' in out + err, (out, err)
-        sid = re.search(r'Session: (\S+)', err).group(1)
-        assert query(home, 'SELECT status FROM session_admissions WHERE target_session_id=?', (sid,)) == [('terminal',)]
-        assert query(home, 'SELECT status FROM worker_executions WHERE session_id=?', (sid,)) == [('terminal',)]
-        policy = json.loads(query(home, 'SELECT value FROM state_meta WHERE key=?', ('gateway.local_policy.v1:' + sid,))[0][0])
-        assert policy['policy']['safe_mode'] is True and policy['policy']['ignore_user_config'] is True
-        rows = records(audit)
-        workers = sorted({r['pid'] for r in rows if r['kind'] == 'start' and r['ppid'] == owner.pid
-                          and r['argv'][-2:] == ['-m', 'agent.managed_worker']})
-        assert len(workers) == 1 and workers[0] != owner.pid, [(r['pid'], r['argv'][-3:]) for r in rows if r['kind'] == 'start']
-        worker = workers[0]
-        # Positive control: the witness is live in the owner, so worker silence is real.
-        assert [r for r in rows if r['kind'] == 'sqlite' and r['pid'] == owner.pid and 'state.db' in r['target']]
-        writable = [r['target'] for r in rows if r['kind'] == 'sqlite' and r['pid'] == worker
-                    and 'state.db' in r['target'] and 'mode=ro' not in r['target']]
-        assert writable == [], writable
-        safe = [r for r in peer.requests if r['text'] == 'SAFE_PROBE_NATIVE' and not r['title_generation']]
-        assert len(safe) == 1 and safe[0]['model'] == 'safe-fixture' and safe[0]['auth'] == 'Bearer fixture', peer.requests
-        return {'worker_pid': worker, 'owner_pid': owner.pid, 'session': sid}
-
     def lock_exclusion(owner, desc):
         from gateway.runtime_ownership import exclusive_maintenance, OwnershipConflict
         with pytest.raises(OwnershipConflict):
@@ -441,10 +408,9 @@ def test_native_gateway_runtime_live(harness):
         sid = asyncio.run(discovery_attach_and_turn(desc))
         asyncio.run(two_clients_fifo(desc, sid))
         receipt['branch_deleted'] = asyncio.run(branch_and_delete(desc, sid))
-        receipt['managed_worker'] = safe_mode_cli_worker(owner)
         receipt['second_owner_exit'] = lock_exclusion(owner, desc)
         port = api_port(desc)
-        code = planned_stop(home, owner)
+        code = planned_stop(home, owner, desc)
         assert code == 0, (home.parent / 'first.log').read_text(encoding='utf-8', errors='replace')
     assert not (home / 'gateway.pid').exists()
     assert not (home / 'gateway.sock').exists()
@@ -498,9 +464,57 @@ def test_native_owner_hard_kill_recovers_queued_admission_once(harness):
         with daemon(home, {**env, 'UGW_STACK_DUMP_AFTER': '20'}, name, fixture='stack_dump_daemon.py') as (owner, desc, _):
             pids.append(owner.pid); epochs.append(desc['authority_epoch'])
             asyncio.run(after_restart(desc))
-            assert planned_stop(home, owner) == 0
+            assert planned_stop(home, owner, desc) == 0
     texts = [r['text'] for r in peer.requests]
     assert texts.count('SAFE_QUEUE') == 1 and texts.count('BLOCK_STARTED') == 1, texts
     assert 'NEVER_REPLAY' not in texts, texts
     assert epochs == sorted(set(epochs)) and len(set(pids)) == 3, (pids, epochs)
     print(json.dumps({'pids': pids, 'epochs': epochs, 'inference_texts': texts, 'rows': admissions(home)}))
+
+
+def test_native_safe_mode_cli_executes_in_managed_worker(harness):
+    """`hermes chat --safe-mode -q` over subprocess pipes: the turn runs in an out-of-process
+    managed worker (pid != owner) that opens no writable canonical sqlite."""
+    home, env, peer, url, audit = harness['home'], harness['env'], harness['peer'], harness['url'], harness['audit']
+
+    def safe_mode_cli_worker(owner, harness):
+        command = [sys.executable, '-m', 'hermes_cli.main', 'chat', '--safe-mode', '--provider', 'custom',
+                   '--base-url', url, '--model', 'safe-fixture', '--api-key', 'fixture', '-Q', '-q', 'SAFE_PROBE_NATIVE']
+        proc = subprocess.Popen(command, cwd=harness['work'], env=env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            out, err = proc.communicate(timeout=180)
+        except subprocess.TimeoutExpired:
+            proc.kill(); out, err = proc.communicate(timeout=10)
+            raise AssertionError(('safe-mode CLI timed out', out, err))
+        out, err = out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
+        starts = [r for r in records(audit) if r['kind'] == 'start' and 'agent.managed_worker' in ' '.join(r['argv'])]
+        evidence = {'owner_pid': owner.pid, 'worker_starts': starts,
+                    'worker_errors': [r for r in records(audit) if r['kind'] == 'worker_error'],
+                    'worker_executions': query(home, 'SELECT execution_id,status FROM worker_executions'),
+                    'gateway_log': (home / 'logs' / 'gateway.log').read_text(encoding='utf-8', errors='replace')[-4000:]}
+        assert proc.returncode == 0, (proc.returncode, out, err, json.dumps(evidence, indent=1))
+        assert 'NATIVE_ACK_SAFE_PROBE_NATIVE' in out + err, (out, err)
+        sid = re.search(r'Session: (\S+)', err).group(1)
+        assert query(home, 'SELECT status FROM session_admissions WHERE target_session_id=?', (sid,)) == [('terminal',)]
+        assert query(home, 'SELECT status FROM worker_executions WHERE session_id=?', (sid,)) == [('terminal',)]
+        policy = json.loads(query(home, 'SELECT value FROM state_meta WHERE key=?', ('gateway.local_policy.v1:' + sid,))[0][0])
+        assert policy['policy']['safe_mode'] is True and policy['policy']['ignore_user_config'] is True
+        rows = records(audit)
+        workers = sorted({r['pid'] for r in rows if r['kind'] == 'start' and r['ppid'] == owner.pid
+                          and r['argv'][-2:] == ['-m', 'agent.managed_worker']})
+        assert len(workers) == 1 and workers[0] != owner.pid, [(r['pid'], r['argv'][-3:]) for r in rows if r['kind'] == 'start']
+        worker = workers[0]
+        # Positive control: the witness is live in the owner, so worker silence is real.
+        assert [r for r in rows if r['kind'] == 'sqlite' and r['pid'] == owner.pid and 'state.db' in r['target']]
+        writable = [r['target'] for r in rows if r['kind'] == 'sqlite' and r['pid'] == worker
+                    and 'state.db' in r['target'] and 'mode=ro' not in r['target']]
+        assert writable == [], writable
+        safe = [r for r in peer.requests if r['text'] == 'SAFE_PROBE_NATIVE' and not r['title_generation']]
+        assert len(safe) == 1 and safe[0]['model'] == 'safe-fixture' and safe[0]['auth'] == 'Bearer fixture', peer.requests
+        return {'worker_pid': worker, 'owner_pid': owner.pid, 'session': sid}
+
+    with daemon(home, {**env, 'UGW_STACK_DUMP_AFTER': '20'}, 'worker.log', fixture='stack_dump_daemon.py') as (owner, desc, _):
+        receipt = safe_mode_cli_worker(owner, harness)
+        assert planned_stop(home, owner, desc) == 0
+    print(json.dumps(receipt))
