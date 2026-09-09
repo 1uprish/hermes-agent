@@ -11,9 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
-import pty
 import re
-import select
 import sqlite3
 import subprocess
 import sys
@@ -56,6 +54,8 @@ class Model(BaseHTTPRequestHandler):
 
 def _pty_cli(argv, cwd, env, timeout=90):
     """Real PTY launch: stdin/stdout/stderr are a terminal, like a user's shell."""
+    import pty  # POSIX-only; the test is linux_only, the module must still collect on Windows
+    import select
     master, slave = pty.openpty()
     proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
     os.close(slave)
