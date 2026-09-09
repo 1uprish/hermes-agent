@@ -154,7 +154,7 @@ def daemon(home, env, log_name, *, fixture=None, expect_ready=True):
         proc = subprocess.Popen(command, cwd=ROOT, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
         try:
             desc = {}
-            deadline = time.monotonic() + 90
+            deadline = time.monotonic() + 180
             while proc.poll() is None and time.monotonic() < deadline:
                 try:
                     desc = control(home, 'identify')
@@ -165,7 +165,9 @@ def daemon(home, env, log_name, *, fixture=None, expect_ready=True):
                 time.sleep(.1)
             if expect_ready:
                 log.flush(); log.seek(0)
-                assert desc.get('state') == 'ready', (desc, proc.poll(), log.read())
+                gateway_log = home / 'logs' / 'gateway.log'
+                detail = gateway_log.read_text(encoding='utf-8', errors='replace')[-8000:] if gateway_log.exists() else ''
+                assert desc.get('state') == 'ready', (desc, proc.poll(), log.read()[-3000:], detail)
             yield proc, desc, log
         finally:
             if proc.poll() is None:

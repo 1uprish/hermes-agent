@@ -85,7 +85,7 @@ def probe(tmp_path):
                         base_url=origin + '/' + side + '/v1', reasoning='high' if side == 'left' else 'low',
                         max_turns=1 if side == 'left' else 3, ignore_rules=side == 'left', toolsets='terminal')
         result = subprocess.run([sys.executable, '-c', 'import cli; cli.main(**' + repr(args) + ')'],
-            cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=70)
+            cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=70)
         assert result.returncode == 0, result.stdout + result.stderr
         if not resume:
             sessions[side] = re.search(r'Session: (\S+)', result.stderr).group(1)

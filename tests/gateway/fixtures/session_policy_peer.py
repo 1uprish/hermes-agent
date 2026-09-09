@@ -114,7 +114,7 @@ async def probe(peer):
             assert (cwd / 'policy-proof.txt').read_text() == 'owned'
             requests = [r for r in peer.requests if r.get('model') == 'policy-' + source]
             assert len(requests) >= 2, peer.requests
-            assert any(str(cwd) in json.dumps(m) for r in requests for m in r['messages'] if m['role'] == 'tool')
+            assert any(str(cwd) in str(m.get('content', '')) for r in requests for m in r['messages'] if m['role'] == 'tool')
             names = {t['function']['name'] for t in requests[0]['tools']}
             assert 'terminal' in names
             assert ('desktop_ui' in agent.enabled_toolsets) == (source == 'gui')
