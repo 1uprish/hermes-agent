@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import type { DesktopUninstallMode, DesktopUninstallSummary } from '@/global'
 import { AlertTriangle, Loader2, Trash2 } from '@/lib/icons'
 import { cn } from '@/lib/utils'
+import { brandVisibleText, PRODUCT_NAME } from '@/product-brand'
 
 import { SectionHeading } from './primitives'
 
@@ -134,7 +135,7 @@ export function UninstallSection() {
           <div>
             <p className="text-sm font-medium text-destructive">Confirm uninstall</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              This removes {pendingOption.consequence}. This can&apos;t be undone.
+              This removes {brandVisibleText(pendingOption.consequence)}. This can&apos;t be undone.
             </p>
             {summary?.running_app_path && (
               <p className="mt-1 font-mono text-[0.68rem] text-muted-foreground/60">App: {summary.running_app_path}</p>
@@ -152,7 +153,7 @@ export function UninstallSection() {
           </div>
         ) : (
           <div className="flex flex-col gap-2">
-            <p className="text-sm font-medium">Uninstall Hermes</p>
+            <p className="text-sm font-medium">Uninstall {PRODUCT_NAME}</p>
             <p className="text-xs text-muted-foreground">
               Choose how much to remove. The app closes to finish the job; reopen the installer any time to come back.
             </p>
@@ -173,7 +174,9 @@ export function UninstallSection() {
                   <Trash2 className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                   <span className="min-w-0">
                     <span className="block text-sm font-medium text-foreground">{opt.title}</span>
-                    <span className="mt-0.5 block text-xs text-muted-foreground">{opt.description}</span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      {brandVisibleText(opt.description)}
+                    </span>
                   </span>
                 </button>
               ))}

@@ -61,6 +61,7 @@ import { existsSync, rmSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import { Arch } from 'electron-builder'
 import { stageNodePty, stageGetWindows } from './stage-native-deps.mjs'
+import { isMacManDarwinPack, stageMacManCuaDriver } from './stage-macman-cua-driver.mjs'
 
 export function cleanStaleAppOutDir(appOutDir) {
   if (!appOutDir || typeof appOutDir !== 'string') {
@@ -113,6 +114,13 @@ export function preserveRollbackBackup(appOutDir, productExeName = 'Hermes.exe')
 export default async function beforePack(context) {
   const appOutDir = context && context.appOutDir
   const platformName = context && context.electronPlatformName
+  const productFilename = context && context.packager?.appInfo?.productFilename
+
+  if (isMacManDarwinPack({ electronPlatformName: platformName, productFilename })) {
+    const desktopRoot = path.resolve(import.meta.dirname, '..')
+    const binaryPath = await stageMacManCuaDriver(desktopRoot)
+    console.log(`[before-pack] staged pinned MacMan Cua Driver: ${binaryPath}`)
+  }
   try {
     // Windows: keep the previous working build as rollback material for the
     // post-build integrity gate (#69179) instead of destroying it. Falls

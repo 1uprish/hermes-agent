@@ -16,6 +16,7 @@ import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { AudioLines, Ear, EarOff, iconSize, Loader2, Square, Volume2, VolumeX } from '@/lib/icons'
 import { cn } from '@/lib/utils'
+import { supportsLegacyWakeWord } from '@/product-brand'
 import { $wakeWord, toggleWakeWord } from '@/store/wake-word'
 
 import { ACTIVE_ICON_BTN, GHOST_ICON_BTN } from './control-classes'
@@ -58,10 +59,11 @@ export function VoiceMenu({
   const { t } = useI18n()
   const c = t.composer
   const wake = useStore($wakeWord)
+  const showWakeWord = supportsLegacyWakeWord()
 
   const phrase = wake.phrase || 'hey hermes'
   const dictating = state.voice.active || voiceStatus !== 'idle'
-  const wakeListening = wake.listening
+  const wakeListening = showWakeWord && wake.listening
   // Anything live keeps the trigger lit, so a folded menu can never look idle
   // while the mic is open.
   const active = dictating || wakeListening || autoSpeak
@@ -143,19 +145,21 @@ export function VoiceMenu({
           {autoSpeak ? <Volume2 className={iconSize.sm} /> : <VolumeX className={iconSize.sm} />}
           {autoSpeak ? c.stopSpeakingReplies : c.speakReplies}
         </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={wakeListening}
-          className={dropdownMenuRow}
-          disabled={disabled || wake.pending}
-          onSelect={event => {
-            event.preventDefault()
-            triggerHaptic(wakeListening ? 'close' : 'open')
-            void toggleWakeWord()
-          }}
-        >
-          {wakeListening ? <Ear className={iconSize.sm} /> : <EarOff className={iconSize.sm} />}
-          {wakeLabel}
-        </DropdownMenuCheckboxItem>
+        {showWakeWord ? (
+          <DropdownMenuCheckboxItem
+            checked={wakeListening}
+            className={dropdownMenuRow}
+            disabled={disabled || wake.pending}
+            onSelect={event => {
+              event.preventDefault()
+              triggerHaptic(wakeListening ? 'close' : 'open')
+              void toggleWakeWord()
+            }}
+          >
+            {wakeListening ? <Ear className={iconSize.sm} /> : <EarOff className={iconSize.sm} />}
+            {wakeLabel}
+          </DropdownMenuCheckboxItem>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   )

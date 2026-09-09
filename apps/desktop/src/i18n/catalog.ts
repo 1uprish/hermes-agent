@@ -1,3 +1,5 @@
+import { brandVisibleTree, IS_MACMAN_DISTRIBUTION } from '../product-brand'
+
 import { ar } from './ar'
 import { en } from './en'
 import { ja } from './ja'
@@ -6,7 +8,7 @@ import type { Locale, Translations } from './types'
 import { zh } from './zh'
 import { zhHant } from './zh-hant'
 
-export const TRANSLATIONS: Record<Locale, Translations> = {
+const sourceTranslations: Record<Locale, Translations> = {
   en,
   zh,
   'zh-hant': zhHant,
@@ -14,3 +16,5 @@ export const TRANSLATIONS: Record<Locale, Translations> = {
   ar,
   ru
 }
+
+export const TRANSLATIONS = brandVisibleTree(sourceTranslations, IS_MACMAN_DISTRIBUTION)

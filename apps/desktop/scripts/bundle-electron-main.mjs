@@ -29,9 +29,7 @@ const external = ['electron', 'node-pty', 'get-windows', 'fs']
 // behaves like a packaged build. Dev bundles (`--dev`) leave the env alone
 // so HERMES_DESKTOP_DEV_SERVER / source-tree resolution keep working.
 const isDev = process.argv.includes('--dev')
-const define = isDev
-  ? {}
-  : { 'process.env.HERMES_DESKTOP_IS_PACKAGED': JSON.stringify(true) }
+const define = isDev ? {} : { 'process.env.HERMES_DESKTOP_IS_PACKAGED': JSON.stringify(true) }
 
 // Bundle main.ts → dist/electron-main.mjs
 await build({
@@ -43,10 +41,13 @@ await build({
   outfile: mainOut,
   external,
   banner: {
-    js: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);",
+    // Dependencies bundled into main may import createRequire themselves.
+    // Alias our ESM require shim so the flattened output cannot redeclare the
+    // same binding (the Cua SDK exposed this as a packaged-launch SyntaxError).
+    js: "import { createRequire as __electronBundleCreateRequire } from 'node:module'; const require = __electronBundleCreateRequire(import.meta.url);"
   },
   define,
-  logLevel: 'info',
+  logLevel: 'info'
 })
 console.log(`bundled ${mainOut}${isDev ? ' (dev)' : ''}`)
 
@@ -60,6 +61,6 @@ await build({
   outfile: preloadOut,
   external,
   define,
-  logLevel: 'info',
+  logLevel: 'info'
 })
 console.log(`bundled ${preloadOut}${isDev ? ' (dev)' : ''}`)

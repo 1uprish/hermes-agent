@@ -9,7 +9,7 @@ const HOST_BUNDLE_ID = 'com.macman.app'
 function connection(generation: string) {
   return {
     contractVersion: '1',
-    driverVersion: '0.24.0',
+    driverVersion: '0.22.1',
     generation,
     mcp: { args: ['mcp', '--embedded'], command: '/MacMan.app/Contents/Resources/cua-driver', environment: [] },
     mcpProtocolVersion: '2025-06-18',
@@ -27,11 +27,13 @@ function fakeDependencies(overrides: Partial<MacManCuaHostDependencies> = {}) {
     async restart() {
       generation += 1
       events.push(`host:restart:${generation}`)
+
       return connection(`generation-${generation}`)
     },
     async start() {
       generation += 1
       events.push(`host:start:${generation}`)
+
       return connection(`generation-${generation}`)
     },
     async stop() {
@@ -48,13 +50,15 @@ function fakeDependencies(overrides: Partial<MacManCuaHostDependencies> = {}) {
   const dependencies: MacManCuaHostDependencies = {
     connect(socketPath) {
       events.push(`driver:connect:${socketPath}`)
+
       return {
         async metadata() {
           events.push('driver:metadata')
+
           return {
             capabilityVersion: '1',
             contractVersion: '1',
-            driverVersion: '0.24.0',
+            driverVersion: '0.22.1',
             embedded: true,
             hostBundleId: HOST_BUNDLE_ID,
             mcpProtocolVersion: '2025-06-18',
@@ -72,6 +76,7 @@ function fakeDependencies(overrides: Partial<MacManCuaHostDependencies> = {}) {
     },
     createHost() {
       events.push('host:create')
+
       return host
     },
     hasRequiredPermissions(status) {
@@ -83,10 +88,12 @@ function fakeDependencies(overrides: Partial<MacManCuaHostDependencies> = {}) {
     },
     readPermissions() {
       events.push('permissions:read')
+
       return permissions
     },
     requestPermissions() {
       events.push('permissions:request')
+
       return permissions
     },
     ...overrides
@@ -153,6 +160,7 @@ test('MacMan fails closed and tears down a daemon that does not report the host 
       }
     })
   })
+
   const controller = createMacManCuaHostController(fake.dependencies)
 
   await assert.rejects(controller.requestPermissionsAndStart(), /refused Cua Driver identity/)

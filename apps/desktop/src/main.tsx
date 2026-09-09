@@ -29,6 +29,7 @@ import { installClipboardShim } from './lib/clipboard'
 import { queryClient } from './lib/query-client'
 import { installRendererAnimationPauseState } from './lib/renderer-loop-pause'
 import { installSelectionCopyColorGuard } from './lib/selection-copy-colors'
+import { PRODUCT_NAME } from './product-brand'
 import { ThemeProvider } from './themes/context'
 
 installClipboardShim()
@@ -47,8 +48,10 @@ if (import.meta.env.MODE !== 'production' || import.meta.env.VITE_PERF_PROBE ===
 
 const winParam = new URLSearchParams(window.location.search).get('win')
 
+document.title = PRODUCT_NAME
+
 if (winParam === 'hud') {
-  document.title = 'Hermes HUD'
+  document.title = `${PRODUCT_NAME} HUD`
 }
 
 if (winParam === 'overlay') {

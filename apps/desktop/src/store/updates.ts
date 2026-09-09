@@ -17,6 +17,7 @@ import type {
 import { checkHermesUpdate, getActionStatus, updateHermes } from '@/hermes'
 import { translateNow } from '@/i18n'
 import { persistString, storedString } from '@/lib/storage'
+import { IS_MACMAN_DISTRIBUTION } from '@/product-brand'
 import { $connectionsRegistry, refreshConnectionsRegistry } from '@/store/connections'
 import { reconnectGateway } from '@/store/gateway-reconnect'
 import { dismissNotification, notify } from '@/store/notifications'
@@ -416,6 +417,10 @@ export async function checkBackendUpdates(): Promise<DesktopUpdateStatus | null>
 }
 
 export async function checkUpdates(): Promise<DesktopUpdateStatus | null> {
+  if (IS_MACMAN_DISTRIBUTION) {
+    return null
+  }
+
   const bridge = window.hermesDesktop?.updates
 
   if (!bridge || $updateChecking.get()) {
@@ -998,6 +1003,13 @@ export function startUpdatePoller(): void {
   const bridge = window.hermesDesktop?.updates
 
   if (!bridge) {
+    return
+  }
+
+  if (IS_MACMAN_DISTRIBUTION) {
+    pollerStarted = true
+    void refreshDesktopVersion()
+
     return
   }
 

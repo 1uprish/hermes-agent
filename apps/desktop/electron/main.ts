@@ -232,6 +232,11 @@ import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
 import { resolveHudWindowing } from './hud-windowing'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
+import {
+  applicationNameForDistribution,
+  readMacManDistribution,
+  userDataPathForDistribution
+} from './macman-distribution'
 import { ensureMainWindow } from './main-window-lifecycle'
 import {
   assertManagedUpdatePreflightClear,
@@ -463,6 +468,24 @@ import { readWindowsUserEnvVar } from './windows-user-env'
 import { isPackagedInstallPath as isPackagedInstallPathUnderRoots } from './workspace-cwd'
 import { readWslWindowsClipboardImage } from './wsl-clipboard-image'
 import { resolvePickerDefaultPath, setActiveGatewayProfile, setWslBridgeProfileState } from './wsl-path-bridge'
+
+const MACMAN_DISTRIBUTION = process.platform === 'darwin' ? readMacManDistribution(process.resourcesPath) : null
+
+if (MACMAN_DISTRIBUTION) {
+  // electron-builder's productName controls Info.plist, but Electron otherwise
+  // keeps the source package name (Hermes) for app.getName() and userData.
+  // Apply the signed distribution identity before the first app.getPath().
+  app.setName(MACMAN_DISTRIBUTION.productName)
+
+  // Electron's singleton lock is keyed by userData. Set it explicitly: merely
+  // changing app.getName() is too late on macOS once Electron has derived its
+  // default path, which made MacMan collide with a running Hermes Desktop.
+  const macManUserData = userDataPathForDistribution(MACMAN_DISTRIBUTION, app.getPath('appData'))
+
+  if (macManUserData) {
+    app.setPath('userData', macManUserData)
+  }
+}
 
 const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR
 
@@ -912,7 +935,7 @@ const BOOT_FAKE_STEP_MS = (() => {
   return Math.max(120, raw)
 })()
 
-const APP_NAME = process.env.HERMES_DESKTOP_APP_NAME || 'Hermes'
+const APP_NAME = applicationNameForDistribution(MACMAN_DISTRIBUTION, process.env.HERMES_DESKTOP_APP_NAME || 'Hermes')
 const HUD_WINDOW_TITLE = `${APP_NAME} HUD`
 const TITLEBAR_HEIGHT = 34
 const MACOS_TRAFFIC_LIGHTS_HEIGHT = 14
@@ -1335,7 +1358,7 @@ if (IS_WINDOWS) {
 app.setAboutPanelOptions({
   applicationName: APP_NAME,
   applicationVersion: resolveHermesVersion(),
-  copyright: 'Copyright © 2026 Nous Research'
+  copyright: MACMAN_DISTRIBUTION ? 'Copyright © 2026 MacMan' : 'Copyright © 2026 Nous Research'
 })
 
 // Custom scheme for streaming audio/video into the renderer. Local paths read
@@ -1639,6 +1662,47 @@ let remoteReauthFailure = null
 // Active first-launch install, so the renderer's Cancel button (and app quit)
 // can abort the in-flight install.sh/ps1 instead of leaving it running.
 let bootstrapAbortController = null
+let macManCuaPermissionService: { stop(): Promise<void> } | null = null
+let macManCuaPermissionStart: Promise<void> | null = null
+
+function startMacManCuaPermissionRuntime(): Promise<void> {
+  if (!MACMAN_DISTRIBUTION) {
+    return Promise.resolve()
+  }
+
+  if (!macManCuaPermissionStart) {
+    macManCuaPermissionStart = import('./macman-cua-runtime')
+      .then(async ({ startMacManCuaPermissionService }) => {
+        macManCuaPermissionService = await startMacManCuaPermissionService({
+          log: message => rememberLog(message),
+          resourcesPath: process.resourcesPath
+        })
+      })
+      .catch(error => {
+        macManCuaPermissionStart = null
+        rememberLog(`[macman-cua] startup failed: ${error instanceof Error ? error.message : String(error)}`)
+        throw error
+      })
+  }
+
+  return macManCuaPermissionStart
+}
+
+async function stopMacManCuaPermissionRuntime(): Promise<void> {
+  try {
+    await macManCuaPermissionStart
+  } catch {
+    // Startup already logged the failure; there may be no service to stop.
+  }
+
+  const service = macManCuaPermissionService
+  macManCuaPermissionService = null
+
+  if (service) {
+    await service.stop()
+  }
+}
+
 // Explicit "the user asked for a repair" flag. Repair used to signal intent by
 // deleting the bootstrap marker, which stranded healthy installs whose only
 // problem was a transient backend error (#72166). Intent now lives here, so
@@ -6903,13 +6967,14 @@ function buildApplicationMenu() {
     click: () => sendOpenUpdatesRequested()
   }
 
+  const updateMenuItems = MACMAN_DISTRIBUTION ? [] : [checkForUpdatesItem, { type: 'separator' }]
+
   if (IS_MAC) {
     template.push({
       label: APP_NAME,
       submenu: [
         { label: `About ${APP_NAME}`, click: () => showAboutPanelFresh() },
-        checkForUpdatesItem,
-        { type: 'separator' },
+        ...updateMenuItems,
         { role: 'services' },
         { type: 'separator' },
         { role: 'hide' },
@@ -12823,7 +12888,7 @@ const backendShutdown = createBackendShutdownCoordinator(async () => {
     poolIdleReaper = null
   }
 
-  await Promise.all([waitForBackendExit(primary), pooledStops])
+  await Promise.all([waitForBackendExit(primary), pooledStops, stopMacManCuaPermissionRuntime()])
 })
 
 async function exitAfterBackendShutdown(code) {
@@ -13463,7 +13528,7 @@ function spawnSecondaryWindow({
     height: SESSION_WINDOW_MIN_HEIGHT,
     minWidth: SESSION_WINDOW_MIN_WIDTH,
     minHeight: SESSION_WINDOW_MIN_HEIGHT,
-    title: 'Hermes',
+    title: APP_NAME,
     titleBarStyle: 'hidden',
     titleBarOverlay: getTitleBarOverlayOptions(),
     trafficLightPosition: IS_MAC ? WINDOW_BUTTON_POSITION : undefined,
@@ -13557,7 +13622,7 @@ function spawnBrowserWindow(tabId) {
     height: BROWSER_WINDOW_HEIGHT,
     minWidth: BROWSER_WINDOW_MIN_WIDTH,
     minHeight: BROWSER_WINDOW_MIN_HEIGHT,
-    title: 'Hermes',
+    title: APP_NAME,
     titleBarStyle: 'hidden',
     titleBarOverlay: getTitleBarOverlayOptions(),
     trafficLightPosition: IS_MAC ? WINDOW_BUTTON_POSITION : undefined,
@@ -13649,7 +13714,7 @@ function createInstanceWindow() {
     ...nextInstanceBounds(),
     minWidth: WINDOW_MIN_WIDTH,
     minHeight: WINDOW_MIN_HEIGHT,
-    title: 'Hermes',
+    title: APP_NAME,
     titleBarStyle: 'hidden',
     titleBarOverlay: getTitleBarOverlayOptions(),
     trafficLightPosition: IS_MAC ? WINDOW_BUTTON_POSITION : undefined,
@@ -14599,7 +14664,7 @@ function createWindow() {
     ...computeWindowOptions(savedWindowState, screen.getAllDisplays()),
     minWidth: WINDOW_MIN_WIDTH,
     minHeight: WINDOW_MIN_HEIGHT,
-    title: 'Hermes',
+    title: APP_NAME,
     // Frameless title bar on every platform so the renderer can paint the
     // "hide sidebar" button (and other left-side titlebar tools) flush with
     // the top edge — matching the macOS layout where the traffic lights sit
@@ -16798,7 +16863,7 @@ ipcMain.handle('hermes:notify', (_event, payload) => {
   const icon = typeof payload?.icon === 'string' && payload.icon.trim() ? payload.icon.trim() : undefined
 
   const notification = new Notification({
-    title: payload?.title || 'Hermes',
+    title: payload?.title || APP_NAME,
     body: payload?.body || '',
     silent: Boolean(payload?.silent),
     ...(icon ? { icon } : {}),
@@ -17940,9 +18005,9 @@ ipcMain.handle('hermes:vscode-theme:search', async (_event, query) => searchMark
 // running app. Three delivery paths: macOS 'open-url',
 // Win/Linux running-app 'second-instance' (argv), Win/Linux cold-start argv.
 // ---------------------------------------------------------------------------
-const HERMES_PROTOCOL = DEV_SERVER ? 'hermes-dev' : 'hermes'
+const HERMES_PROTOCOL = MACMAN_DISTRIBUTION ? 'macman' : DEV_SERVER ? 'hermes-dev' : 'hermes'
 /** Schemes accepted when parsing inbound URLs (dev accepts both). */
-const DEEPLINK_SCHEMES = DEV_SERVER ? ['hermes-dev', 'hermes'] : ['hermes']
+const DEEPLINK_SCHEMES = MACMAN_DISTRIBUTION ? ['macman'] : DEV_SERVER ? ['hermes-dev', 'hermes'] : ['hermes']
 let _pendingDeepLink = null
 let _rendererReadyForDeepLink = false
 
@@ -18081,6 +18146,11 @@ app.on('open-url', (event, url) => {
 })
 
 app.whenReady().then(() => {
+  // MacMan's signed host owns Accessibility and Screen Recording. The Cua
+  // daemon is a directly supervised resource and is not started until both
+  // grants are visible to this process.
+  void startMacManCuaPermissionRuntime()
+
   // Warm the login-shell PATH resolution immediately so it usually completes
   // before the backend start path awaits the same single-flight promise.
   void ensureLoginShellPath()

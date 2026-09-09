@@ -5,11 +5,7 @@ import path from 'node:path'
 
 import { test } from 'vitest'
 
-import {
-  CUA_DRIVER_VERSION,
-  isMacManDarwinPack,
-  validateStagedCuaDriver
-} from './stage-macman-cua-driver.mjs'
+import { CUA_DRIVER_VERSION, isMacManDarwinPack, validateStagedCuaDriver } from './stage-macman-cua-driver.mjs'
 
 test('the MacMan packaging gate is exact and macOS-only', () => {
   assert.equal(isMacManDarwinPack({ electronPlatformName: 'darwin', productFilename: 'MacMan' }), true)
@@ -33,8 +29,8 @@ test('a staged Cua Driver must be executable, pinned, and universal', async () =
   await assert.rejects(
     validateStagedCuaDriver(binaryPath, {
       inspectArchitectures: async () => ['arm64'],
-      readVersion: async () => 'cua-driver 0.23.2'
+      readVersion: async () => 'cua-driver 0.21.0'
     }),
-    /expected cua-driver 0\.24\.0.*universal/i
+    /expected cua-driver 0\.22\.1.*universal/i
   )
 })

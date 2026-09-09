@@ -7,6 +7,7 @@ import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
 import { AudioLines, Ear, EarOff, iconSize, Layers3, Loader2, Square, Volume2, VolumeX } from '@/lib/icons'
 import { cn } from '@/lib/utils'
+import { supportsLegacyWakeWord } from '@/product-brand'
 import { $hudMode, closeHud, resetHudLayout } from '@/store/hud'
 import { $wakeWord, toggleWakeWord } from '@/store/wake-word'
 
@@ -99,7 +100,7 @@ export function ComposerControls({
     <>
       <DictationButton disabled={disabled} onToggle={onDictate} state={state.voice} status={voiceStatus} />
       <AutoSpeakButton active={autoSpeak} disabled={disabled} onToggle={onToggleAutoSpeak} />
-      <WakeWordButton disabled={disabled} />
+      {supportsLegacyWakeWord() ? <WakeWordButton disabled={disabled} /> : null}
     </>
   )
 
@@ -240,7 +241,7 @@ function ConversationPill({
     <div className="ml-auto flex shrink-0 items-center gap-(--composer-control-gap)">
       {/* Keep the ear visible during voice chat — shown paused, since the
           conversation holds the mic (the one time wake must not listen). */}
-      <WakeWordButton disabled={disabled} pausedForVoice />
+      {supportsLegacyWakeWord() ? <WakeWordButton disabled={disabled} pausedForVoice /> : null}
       <Tip label={muted ? c.unmuteMic : c.muteMic}>
         <Button
           aria-label={muted ? c.unmuteMic : c.muteMic}
