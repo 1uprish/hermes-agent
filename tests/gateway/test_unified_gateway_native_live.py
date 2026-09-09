@@ -166,7 +166,14 @@ def daemon(home, env, log_name, *, fixture=None, expect_ready=True):
             if expect_ready:
                 log.flush(); log.seek(0)
                 detail = {name: (home / 'logs' / name).read_text(encoding='utf-8', errors='replace')[-6000:]
-                          for name in ('gateway.log', 'stacks.txt') if (home / 'logs' / name).exists()}
+                          for name in ('gateway.log',) if (home / 'logs' / name).exists()}
+                stacks = home / 'logs' / 'stacks.txt'
+                if stacks.exists():
+                    # Full dump into the CI artifact directory; the assertion message would truncate it.
+                    artifacts = Path(os.environ.get('UGW_ARTIFACT_DIR', str(home.parent)))
+                    artifacts.mkdir(parents=True, exist_ok=True)
+                    (artifacts / f'stacks-{proc.pid}.txt').write_text(stacks.read_text(encoding='utf-8', errors='replace'), encoding='utf-8')
+                    detail['stacks.txt'] = stacks.read_text(encoding='utf-8', errors='replace')
                 assert desc.get('state') == 'ready', (desc, proc.poll(), log.read()[-3000:], detail)
             yield proc, desc, log
         finally:
