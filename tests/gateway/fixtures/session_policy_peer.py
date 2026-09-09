@@ -114,7 +114,13 @@ async def probe(peer):
             assert (cwd / 'policy-proof.txt').read_text() == 'owned'
             requests = [r for r in peer.requests if r.get('model') == 'policy-' + source]
             assert len(requests) >= 2, peer.requests
-            assert any(str(cwd) in str(m.get('content', '')) for r in requests for m in r['messages'] if m['role'] == 'tool')
+            # Git Bash on Windows prints pwd as /c/Users/... (MSYS form); accept either spelling.
+            spellings = {str(cwd), cwd.as_posix()}
+            if cwd.drive:
+                spellings.add('/' + cwd.drive[0].lower() + cwd.as_posix()[len(cwd.drive):])
+            assert any(any(form in str(m.get('content', '')) for form in spellings)
+                       for r in requests for m in r['messages'] if m['role'] == 'tool'), \
+                [m.get('content') for r in requests for m in r['messages'] if m['role'] == 'tool']
             names = {t['function']['name'] for t in requests[0]['tools']}
             assert 'terminal' in names
             assert ('desktop_ui' in agent.enabled_toolsets) == (source == 'gui')
