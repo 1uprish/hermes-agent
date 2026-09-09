@@ -148,6 +148,11 @@ def planned_stop(home, proc):
         return proc.wait(timeout=90)
     except subprocess.TimeoutExpired:
         detail = (home / 'logs' / 'gateway.log').read_text(encoding='utf-8', errors='replace')[-6000:]
+        stacks = home / 'logs' / 'stacks.txt'
+        if stacks.exists():
+            artifacts = Path(os.environ.get('UGW_ARTIFACT_DIR', str(home.parent)))
+            artifacts.mkdir(parents=True, exist_ok=True)
+            (artifacts / f'stacks-stop-{proc.pid}.txt').write_text(stacks.read_text(encoding='utf-8', errors='replace'), encoding='utf-8')
         raise AssertionError(('planned stop did not exit within 90s', marker,
                               (home / '.gateway-planned-stop.json').exists(), detail))
 
@@ -265,7 +270,17 @@ def harness(tmp_path, peer):
         "def witness(event, args):\n"
         "    if event == 'sqlite3.connect':\n"
         "        record('sqlite', target=str(args[0]))\n"
-        "sys.addaudithook(witness)\n", encoding='utf-8')
+        "sys.addaudithook(witness)\n"
+        "# The managed worker reports failures to its owner as an opaque 'error' frame (no traceback\n"
+        "# leaves the process by design); the frame is encoded inside the except block, so the live\n"
+        "# exception is still visible here for the test's own diagnostics.\n"
+        "import json as _json, traceback\n"
+        "_dumps = _json.dumps\n"
+        "def _dumps_witness(obj, *a, **kw):\n"
+        "    if type(obj) is dict and obj.get('type') == 'error' and 'reason' in obj:\n"
+        "        record('worker_error', reason=obj.get('reason'), traceback=traceback.format_exc())\n"
+        "    return _dumps(obj, *a, **kw)\n"
+        "_json.dumps = _dumps_witness\n", encoding='utf-8')
     env = {k: os.environ[k] for k in _CHILD_ENV_KEYS if k in os.environ}
     env.update(HOME=str(user), USERPROFILE=str(user), HERMES_HOME=str(home), PYTHONUNBUFFERED='1',
                PYTHONPATH=os.pathsep.join([str(site), str(ROOT)]),
@@ -371,6 +386,7 @@ def test_native_gateway_runtime_live(harness):
         out, err = out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
         starts = [r for r in records(audit) if r['kind'] == 'start' and 'agent.managed_worker' in ' '.join(r['argv'])]
         evidence = {'owner_pid': owner.pid, 'worker_starts': starts,
+                    'worker_errors': [r for r in records(audit) if r['kind'] == 'worker_error'],
                     'worker_executions': query(home, 'SELECT execution_id,status FROM worker_executions'),
                     'gateway_log': (home / 'logs' / 'gateway.log').read_text(encoding='utf-8', errors='replace')[-4000:]}
         assert proc.returncode == 0, (proc.returncode, out, err, json.dumps(evidence, indent=1))
@@ -420,7 +436,7 @@ def test_native_gateway_runtime_live(harness):
 
     # Same ordinary gateway.run entry; the wrapper only dumps every thread's stack to
     # logs/stacks.txt after 60s so a readiness stall on a native runner names its frame.
-    with daemon(home, {**env, 'UGW_STACK_DUMP_AFTER': '60'}, 'first.log', fixture='stack_dump_daemon.py') as (owner, desc, _):
+    with daemon(home, {**env, 'UGW_STACK_DUMP_AFTER': '20'}, 'first.log', fixture='stack_dump_daemon.py') as (owner, desc, _):
         receipt['first_pid'] = owner.pid
         sid = asyncio.run(discovery_attach_and_turn(desc))
         asyncio.run(two_clients_fifo(desc, sid))
@@ -479,7 +495,7 @@ def test_native_owner_hard_kill_recovers_queued_admission_once(harness):
         assert owner.poll() is not None
     peer.release.set()
     for name in ('restart-1.log', 'restart-2.log'):
-        with daemon(home, env, name) as (owner, desc, _):
+        with daemon(home, {**env, 'UGW_STACK_DUMP_AFTER': '20'}, name, fixture='stack_dump_daemon.py') as (owner, desc, _):
             pids.append(owner.pid); epochs.append(desc['authority_epoch'])
             asyncio.run(after_restart(desc))
             assert planned_stop(home, owner) == 0

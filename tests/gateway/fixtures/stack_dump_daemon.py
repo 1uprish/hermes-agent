@@ -12,12 +12,13 @@ import json
 import os
 from pathlib import Path
 import runpy
+import time
 
 path = Path(os.environ['HERMES_HOME']) / 'logs' / 'stacks.txt'
 path.parent.mkdir(parents=True, exist_ok=True)
 delay = float(os.environ.get('UGW_STACK_DUMP_AFTER', '60'))
 _sink = open(path, "w", encoding="utf-8")  # noqa: SIM115 - must outlive the dump
-faulthandler.dump_traceback_later(delay, repeat=False, file=_sink)
+faulthandler.dump_traceback_later(delay, repeat=True, file=_sink)
 _real_run = asyncio.run
 
 
@@ -50,8 +51,9 @@ def _run(main, **kwargs):
         loop = asyncio.get_running_loop()
 
         def dump():
+            loop.call_later(delay, dump)
             with open(path, 'a', encoding='utf-8') as sink:
-                sink.write('\n=== asyncio tasks ===\n')
+                sink.write(f'\n=== asyncio tasks @ {time.time():.0f} ===\n')
                 for task in asyncio.all_tasks(loop):
                     sink.write(f'\n--- {task.get_name()} done={task.done()} ---\n')
                     task.print_stack(file=sink)
