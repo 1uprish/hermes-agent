@@ -939,6 +939,26 @@ class TestWebServerEndpoints:
         assert "--target /opt/data/lazy-packages" in pip_rows[0]["command"]
         assert installed == [("honcho-ai",)]
 
+    def test_hindsight_embedded_setup_installs_the_local_runtime_variant(self, monkeypatch):
+        from tools import lazy_deps as ld
+
+        monkeypatch.setattr(_web_server_memory, "_dependency_importable", lambda dep: False)
+        installed = []
+
+        def fake_install_specs(specs, *, timeout=300):
+            installed.append(tuple(specs))
+            return ld.InstallSpecsResult(ok=True, command="uv pip install", stdout="ok", stderr="")
+
+        monkeypatch.setattr(ld, "install_specs", fake_install_specs)
+
+        resp = self.client.post(
+            "/api/memory/providers/hindsight/setup",
+            json={"values": {"mode": "local_embedded"}},
+        )
+
+        assert resp.status_code == 200
+        assert installed == [("hindsight-all>=0.6.1,<1",)]
+
 
 
 

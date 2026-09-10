@@ -6,10 +6,12 @@ plaintext ``HINDSIGHT_API_LLM_API_KEY`` and must be created/kept owner-only
 import os
 import stat
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
 from plugins.memory.hindsight import (
+    _embedded_llm_api_key,
     _embedded_profile_env_path,
     _materialize_embedded_profile_env,
 )
@@ -27,6 +29,16 @@ _CONFIG = {
     "llm_provider": "openai",
     "llm_model": "gpt-4o-mini",
 }
+
+
+def test_embedded_runtime_can_reuse_a_profile_scoped_model_key_by_env_name(monkeypatch):
+    import plugins.memory.hindsight.embedded as hs_embedded
+
+    secret_lookup = Mock(return_value="sk-current-model")
+    monkeypatch.setattr(hs_embedded, "get_secret", secret_lookup)
+
+    assert _embedded_llm_api_key({**_CONFIG, "llm_key_env": "OPENAI_API_KEY"}) == "sk-current-model"
+    secret_lookup.assert_called_once_with("OPENAI_API_KEY", "")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits are not enforced on Windows")

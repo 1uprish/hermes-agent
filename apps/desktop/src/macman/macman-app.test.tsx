@@ -99,6 +99,42 @@ describe('standalone MacMan frontend', () => {
     expect(screen.getByText('Activity history')).toBeTruthy()
   })
 
+  it('makes local memory a first-class default-on setting without exposing its provider', () => {
+    const onMemorySettingChange = vi.fn()
+
+    render(
+      <MacManApp
+        initialView="memory"
+        memorySettings={{
+          enabled: true,
+          learnFromConversations: true,
+          status: 'ready',
+          useSavedMemories: true
+        }}
+        onMemorySettingChange={onMemorySettingChange}
+        snapshot={snapshot}
+      />
+    )
+
+    const settingsNavigation = screen.getByText('Settings').parentElement
+    const labels = Array.from(settingsNavigation?.querySelectorAll('.mm-nav-item') ?? []).map(item =>
+      item.textContent?.trim()
+    )
+
+    expect(labels.indexOf('Connections')).toBeLessThan(labels.indexOf('Memory'))
+    expect(labels.indexOf('Memory')).toBeLessThan(labels.indexOf('Privacy & Safety'))
+    expect(screen.getByRole('heading', { name: 'Memory' })).toBeTruthy()
+    expect(screen.getByText('Stored on this Mac')).toBeTruthy()
+    expect(screen.queryByText('Hindsight')).toBeNull()
+
+    for (const label of ['Memory', 'Learn from conversations', 'Use saved memories']) {
+      expect(screen.getByRole('switch', { name: label }).getAttribute('aria-checked')).toBe('true')
+    }
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Learn from conversations' }))
+    expect(onMemorySettingChange).toHaveBeenCalledWith('learnFromConversations', false)
+  })
+
   it('shows computer control as ready only when both required grants are present', () => {
     const { rerender } = render(<MacManApp snapshot={snapshot} />)
     expect(screen.getByText('1 of 2 ready')).toBeTruthy()
