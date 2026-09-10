@@ -78,4 +78,34 @@ describe('MacMan wrapper root', () => {
 
     await waitFor(() => expect(bridge.snapshot).toHaveBeenCalledTimes(2))
   })
+
+  it('does not let a stale launch snapshot overwrite a newer focus refresh', async () => {
+    let resolveLaunch: ((snapshot: typeof missingAccess) => void) | undefined
+    const ready = {
+      ...missingAccess,
+      permissions: { ...missingAccess.permissions, accessibility: 'granted' as const }
+    }
+    const bridge: MacManNativeBridge = {
+      openSystemSettings: vi.fn(),
+      requestPermission: vi.fn(),
+      snapshot: vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<typeof missingAccess>(resolve => {
+              resolveLaunch = resolve
+            })
+        )
+        .mockResolvedValueOnce(ready)
+    }
+
+    render(<MacManRoot bridge={bridge} />)
+    await waitFor(() => expect(bridge.snapshot).toHaveBeenCalledOnce())
+    window.dispatchEvent(new Event('focus'))
+    expect(await screen.findByText('Computer control ready')).toBeTruthy()
+
+    resolveLaunch?.(missingAccess)
+    await Promise.resolve()
+    expect(screen.getByText('Computer control ready')).toBeTruthy()
+  })
 })

@@ -100,3 +100,12 @@ test('wrapper startup failure is surfaced as disconnected state rather than a fa
   assert.equal(snapshot.permissions.accessibility, 'unavailable')
   assert.equal(snapshot.permissions.screenRecording, 'unavailable')
 })
+
+test('native permission routes reject unknown IPC values', async () => {
+  const fake = fakeBridgeDependencies()
+  const bridge = createMacManNativeBridgeController(fake.dependencies)
+
+  await assert.rejects(() => bridge.requestPermission('../../shell' as never), /unsupported permission/i)
+  await assert.rejects(() => bridge.openSystemSettings('everything' as never), /unsupported permission/i)
+  assert.deepEqual(fake.events, [])
+})
