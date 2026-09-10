@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import { afterEach, test } from 'vitest'
 
 import {
+  macManConnectorResourcesRoot,
   resolveMacManConnectorExecutable,
   runMacManConnector
 } from './macman-connector-runtime'
@@ -31,6 +32,11 @@ afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { force: true, recursive: true })
   }
+})
+
+test('resource resolution follows staged output in development and packaged resources in releases', () => {
+  assert.equal(macManConnectorResourcesRoot('/Applications/MacMan.app', '/release/resources', false), '/Applications/MacMan.app/build')
+  assert.equal(macManConnectorResourcesRoot('/Applications/MacMan.app', '/release/resources', true), '/release/resources')
 })
 
 test('runtime resolution selects the host Gmail binary and universal local connectors', () => {
