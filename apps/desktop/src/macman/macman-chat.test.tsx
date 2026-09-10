@@ -6,6 +6,7 @@ import type { MacManChatClient, MacManChatSnapshot } from './macman-chat-client'
 import { MacManThinkingMark } from './macman-thinking-mark'
 
 const readySnapshot: MacManChatSnapshot = {
+  activeModel: { model: 'gpt-5.5', provider: 'openai-codex' },
   busy: false,
   error: undefined,
   messages: [
@@ -24,6 +25,7 @@ function fakeClient(connectedSnapshot = readySnapshot) {
     getSnapshot: vi.fn(() => ({ busy: false, messages: [], status: 'connecting' as const })),
     retry: vi.fn(),
     send: vi.fn().mockResolvedValue(undefined),
+    switchModel: vi.fn().mockResolvedValue({ confirmRequired: false }),
     subscribe: vi.fn(next => {
       listener = next
 
@@ -67,6 +69,53 @@ describe('MacMan continuous chat', () => {
 
     expect(indicator.querySelector('img')?.getAttribute('src')).toBe('./macman-mark-transparent.png')
     expect(container.querySelector('.mm-chat-thinking span')).toBeNull()
+  })
+
+  it('shows connected models in the composer and labels the model whose limit was exhausted', async () => {
+    const client = fakeClient({
+      ...readySnapshot,
+      limitedModels: {
+        'openai-codex:gpt-5.5': {
+          kind: 'exhausted',
+          message: 'HTTP 429: The usage limit has been reached',
+          model: 'gpt-5.5',
+          provider: 'openai-codex'
+        }
+      }
+    })
+    const loadModelCatalog = vi.fn().mockResolvedValue({
+      connected: true,
+      current: { model: 'deepseek-v4-pro', provider: 'deepseek' },
+      providers: [
+        {
+          authenticated: true,
+          id: 'openai-codex',
+          models: ['gpt-5.5'],
+          name: 'ChatGPT',
+          setup: 'oauth'
+        },
+        {
+          authenticated: true,
+          id: 'deepseek',
+          keyEnv: 'DEEPSEEK_API_KEY',
+          models: ['deepseek-v4-pro', 'deepseek-v4-flash'],
+          name: 'DeepSeek',
+          setup: 'api-key'
+        }
+      ]
+    })
+
+    render(<MacManChat client={client} loadModelCatalog={loadModelCatalog} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose model, currently gpt-5.5' }))
+
+    expect(await screen.findByText('ChatGPT')).toBeTruthy()
+    expect(screen.getByText('DeepSeek')).toBeTruthy()
+    expect(screen.getByText('Limit reached')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use deepseek-v4-pro' }))
+
+    await waitFor(() => expect(client.switchModel).toHaveBeenCalledWith('deepseek', 'deepseek-v4-pro'))
   })
 
   it('starts the particle canvas when the cached mark loads immediately', async () => {

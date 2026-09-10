@@ -79,6 +79,68 @@ describe('MacMan chat session continuity', () => {
     expect(latest).toMatchObject({ busy: false, error: 'Connection dropped.', status: 'error' })
   })
 
+  it('switches the live continuous session and remembers which model exhausted its limit', async () => {
+    let emit: ((event: { payload?: Record<string, unknown>; session_id?: string; type: string }) => void) | undefined
+
+    const transport: MacManChatTransport = {
+      close: vi.fn(),
+      connect: vi.fn().mockResolvedValue(undefined),
+      onEvent: vi.fn(handler => {
+        emit = handler
+
+        return () => undefined
+      }),
+      request: vi.fn(async (method: string) => {
+        if (method === 'session.list') {
+          return { sessions: [{ id: 'stored-chat', title: 'MacMan Chat' }] }
+        }
+
+        if (method === 'session.resume') {
+          return {
+            info: { model: 'gpt-5.5', provider: 'openai-codex' },
+            messages: [],
+            session_id: 'runtime-chat'
+          }
+        }
+
+        return { confirm_required: false, value: 'deepseek-v4-pro' }
+      }) as MacManChatTransport['request']
+    }
+
+    const client = createMacManChatClient(
+      {
+        getChatConnection: vi.fn().mockResolvedValue({ authMode: 'token', wsUrl: 'ws://macman.test/ws' }),
+        getFreshChatConnection: vi.fn()
+      },
+      () => transport
+    )
+
+    await client.connect()
+    emit?.({
+      payload: { error: 'HTTP 429: The usage limit has been reached', status: 'error' },
+      session_id: 'runtime-chat',
+      type: 'message.complete'
+    })
+
+    expect(client.getSnapshot().limitedModels).toEqual({
+      'openai-codex:gpt-5.5': {
+        kind: 'exhausted',
+        message: 'HTTP 429: The usage limit has been reached',
+        model: 'gpt-5.5',
+        provider: 'openai-codex'
+      }
+    })
+
+    await client.switchModel('deepseek', 'deepseek-v4-pro')
+
+    expect(transport.request).toHaveBeenLastCalledWith('config.set', {
+      key: 'model',
+      session_id: 'runtime-chat',
+      value: 'deepseek-v4-pro --provider deepseek --session'
+    })
+    expect(client.getSnapshot().activeModel).toEqual({ model: 'deepseek-v4-pro', provider: 'deepseek' })
+  })
+
   it('reconnects to the durable session after the chat view is left and reopened', async () => {
     const transport: MacManChatTransport = {
       close: vi.fn(),
