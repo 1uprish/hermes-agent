@@ -27,6 +27,15 @@ export interface MacManActivity {
   state: 'complete' | 'failed' | 'running'
 }
 
+export interface MacManPendingInput {
+  choices?: string[]
+  command?: string
+  description: string
+  envVar?: string
+  kind: 'approval' | 'clarify' | 'secret' | 'sudo'
+  requestId?: string
+}
+
 export interface MacManActiveModel {
   model: string
   provider: string
@@ -52,6 +61,7 @@ export interface MacManChatSnapshot {
   error?: string
   limitedModels?: Record<string, MacManModelLimit>
   messages: MacManChatMessage[]
+  pendingInput?: MacManPendingInput
   status: 'connecting' | 'error' | 'ready'
 }
 
@@ -59,7 +69,9 @@ export interface MacManChatClient {
   connect(): Promise<void>
   dispose(): void
   getSnapshot(): MacManChatSnapshot
+  interrupt(): Promise<void>
   retry(): Promise<void>
+  respondToInput(value: string): Promise<void>
   send(text: string): Promise<void>
   subscribe(listener: (snapshot: MacManChatSnapshot) => void): () => void
   switchModel(provider: string, model: string, confirmExpensiveModel?: boolean): Promise<MacManModelSwitchResult>
@@ -283,10 +295,68 @@ interface SessionStart {
   }
   info?: Record<string, unknown>
   messages?: SessionMessage[]
+  pending_approval?: Record<string, unknown>
+  pending_clarify?: Record<string, unknown>
   queued?: { user?: string }
   running?: boolean
   session_id: string
   stored_session_id?: string
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function stringChoices(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined
+  }
+
+  const choices = value.flatMap(choice => {
+    const text = stringValue(choice)
+
+    return text ? [text] : []
+  })
+
+  return choices.length ? choices : undefined
+}
+
+function pendingInput(
+  kind: MacManPendingInput['kind'],
+  payload: Record<string, unknown>
+): MacManPendingInput | undefined {
+  const requestId = stringValue(payload.request_id)
+
+  if (kind === 'approval') {
+    return {
+      choices: stringChoices(payload.choices) ?? ['once', 'deny'],
+      command: stringValue(payload.command),
+      description: stringValue(payload.description) ?? 'MacMan needs your approval to continue.',
+      kind,
+      requestId
+    }
+  }
+
+  if (kind === 'clarify') {
+    const description = stringValue(payload.question)
+
+    return description
+      ? { choices: stringChoices(payload.choices), description, kind, requestId }
+      : undefined
+  }
+
+  if (kind === 'sudo') {
+    return { description: 'Enter your Mac password to continue.', kind, requestId }
+  }
+
+  const envVar = stringValue(payload.env_var)
+
+  return {
+    description: stringValue(payload.prompt) ?? (envVar ? `Enter ${envVar} to continue.` : 'Enter the requested secret to continue.'),
+    envVar,
+    kind,
+    requestId
+  }
 }
 
 function textFromContent(content: unknown): string {
@@ -446,9 +516,46 @@ class MacManChatGatewayClient implements MacManChatClient {
     return this.state
   }
 
+  async interrupt(): Promise<void> {
+    if (!this.gateway || !this.runtimeSessionId || this.state.status !== 'ready') {
+      return
+    }
+
+    await this.gateway.request('session.interrupt', { session_id: this.runtimeSessionId })
+    this.streamMessageId = undefined
+    this.publish({ ...this.state, busy: false, pendingInput: undefined })
+  }
+
   async retry(): Promise<void> {
     this.dispose()
     await this.connect()
+  }
+
+  async respondToInput(value: string): Promise<void> {
+    const input = this.state.pendingInput
+    const response = value.trim()
+
+    if (!input || !response || !this.gateway || !this.runtimeSessionId || this.state.status !== 'ready') {
+      return
+    }
+
+    const common = {
+      ...(input.requestId ? { request_id: input.requestId } : {}),
+      session_id: this.runtimeSessionId
+    }
+    const requests: Record<MacManPendingInput['kind'], { method: string; params: Record<string, unknown> }> = {
+      approval: { method: 'approval.respond', params: { choice: response, ...common } },
+      clarify: { method: 'clarify.respond', params: { answer: response, ...common } },
+      secret: { method: 'secret.respond', params: { value: response, ...common } },
+      sudo: { method: 'sudo.respond', params: { password: response, ...common } }
+    }
+    const request = requests[input.kind]
+
+    await this.gateway.request(request.method, request.params)
+
+    if (this.state.pendingInput === input) {
+      this.publish({ ...this.state, pendingInput: undefined })
+    }
   }
 
   async send(text: string): Promise<void> {
@@ -659,6 +766,20 @@ class MacManChatGatewayClient implements MacManChatClient {
       this.appendAssistantDelta(textFromContent(payload.text))
     } else if (event.type === 'message.complete') {
       this.completeAssistant(payload)
+    } else if (event.type === 'approval.request') {
+      this.publish({ ...this.state, pendingInput: pendingInput('approval', payload) })
+    } else if (event.type === 'clarify.request') {
+      this.publish({ ...this.state, pendingInput: pendingInput('clarify', payload) })
+    } else if (event.type === 'sudo.request') {
+      this.publish({ ...this.state, pendingInput: pendingInput('sudo', payload) })
+    } else if (event.type === 'secret.request') {
+      this.publish({ ...this.state, pendingInput: pendingInput('secret', payload) })
+    } else if (event.type === 'sudo.expire' || event.type === 'secret.expire') {
+      const requestId = stringValue(payload.request_id)
+
+      if (!requestId || requestId === this.state.pendingInput?.requestId) {
+        this.publish({ ...this.state, pendingInput: undefined })
+      }
     } else if (event.type === 'session.info') {
       const activeModel = modelSelection(payload)
 
@@ -799,6 +920,11 @@ class MacManChatGatewayClient implements MacManChatClient {
         error: undefined,
         limitedModels: this.state.limitedModels,
         messages: hydrateLiveMessages(session),
+        pendingInput: session.pending_approval
+          ? pendingInput('approval', session.pending_approval)
+          : session.pending_clarify
+            ? pendingInput('clarify', session.pending_clarify)
+            : undefined,
         status: 'ready'
       })
     } catch (error) {

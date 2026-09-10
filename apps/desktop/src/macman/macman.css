@@ -1176,6 +1176,32 @@ button:focus-visible {
   font-size: 11.5px;
 }
 
+.mm-chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+}
+
+.mm-chat-stop {
+  display: inline-flex;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--mm-border);
+  border-radius: 8px;
+  background: var(--mm-card);
+  color: var(--mm-text-secondary);
+  align-items: center;
+  gap: 5px;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.mm-chat-stop:hover {
+  border-color: color-mix(in srgb, var(--mm-red) 34%, var(--mm-border));
+  color: var(--mm-red);
+}
+
 .mm-chat-status {
   display: inline-flex;
   color: var(--mm-text-secondary);
@@ -1305,6 +1331,84 @@ button:focus-visible {
 
 .mm-chat-activity--failed > span {
   background: var(--mm-red);
+}
+
+.mm-chat-input-card {
+  width: min(560px, 92%);
+  margin: 0 0 24px;
+  padding: 15px;
+  border: 1px solid color-mix(in srgb, var(--mm-orange) 34%, var(--mm-border));
+  border-radius: 13px;
+  background: var(--mm-card);
+}
+
+.mm-chat-input-card > strong {
+  display: block;
+  color: var(--mm-orange);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.mm-chat-input-card > p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.mm-chat-input-card > code {
+  display: block;
+  margin-top: 9px;
+  padding: 8px 9px;
+  overflow-x: auto;
+  border-radius: 7px;
+  background: var(--mm-fill);
+  color: var(--mm-text-secondary);
+  font-size: 10px;
+  white-space: pre-wrap;
+}
+
+.mm-chat-input-actions,
+.mm-chat-input-form {
+  display: flex;
+  margin-top: 12px;
+  align-items: center;
+  gap: 7px;
+}
+
+.mm-chat-input-actions button,
+.mm-chat-input-form button {
+  min-height: 29px;
+  padding: 0 10px;
+  border: 1px solid var(--mm-border);
+  border-radius: 8px;
+  background: var(--mm-fill);
+  color: var(--mm-text);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.mm-chat-input-actions button:hover,
+.mm-chat-input-form button:hover:not(:disabled) {
+  background: var(--mm-fill-hover);
+}
+
+.mm-chat-input-form input {
+  min-width: 0;
+  height: 31px;
+  padding: 0 9px;
+  border: 1px solid var(--mm-border);
+  border-radius: 8px;
+  outline: 0;
+  background: var(--mm-fill);
+  color: var(--mm-text);
+  flex: 1;
+  font: inherit;
+  font-size: 11px;
+}
+
+.mm-chat-input-form input:focus {
+  border-color: color-mix(in srgb, var(--mm-accent) 60%, var(--mm-border));
 }
 
 .mm-chat-empty {

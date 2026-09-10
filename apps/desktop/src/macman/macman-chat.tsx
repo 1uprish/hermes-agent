@@ -1,7 +1,7 @@
-import { IconArrowUp, IconRefresh } from '@tabler/icons-react'
+import { IconArrowUp, IconPlayerStop, IconRefresh } from '@tabler/icons-react'
 import { useEffect, useRef, useState } from 'react'
 
-import type { MacManChatClient, MacManChatSnapshot } from './macman-chat-client'
+import type { MacManChatClient, MacManChatSnapshot, MacManPendingInput } from './macman-chat-client'
 import { MacManModelSelector } from './macman-model-selector'
 import { MacManThinkingMark } from './macman-thinking-mark'
 import type { MacManModelCatalog } from './native-contract'
@@ -21,6 +21,59 @@ const DISPATCH_LABELS = {
   routing: 'Choosing the best route',
   steer: 'Added to current task'
 } as const
+
+const APPROVAL_LABELS: Record<string, string> = {
+  always: 'Always allow',
+  deny: 'Deny',
+  once: 'Allow once',
+  session: 'Allow for session'
+}
+
+function MacManInputCard({ input, onRespond }: { input: MacManPendingInput; onRespond(value: string): void }) {
+  const [value, setValue] = useState('')
+  const choices = input.choices ?? []
+  const requiresTypedValue = input.kind === 'secret' || input.kind === 'sudo' || choices.length === 0
+
+  return (
+    <section aria-label="MacMan needs input" className="mm-chat-input-card">
+      <strong>{input.kind === 'approval' ? 'Approval needed' : input.kind === 'clarify' ? 'Quick question' : 'Private input needed'}</strong>
+      <p>{input.description}</p>
+      {input.command ? <code>{input.command}</code> : null}
+      {choices.length ? (
+        <div className="mm-chat-input-actions">
+          {choices.map(choice => (
+            <button key={choice} onClick={() => onRespond(choice)} type="button">
+              {input.kind === 'approval' ? APPROVAL_LABELS[choice] ?? choice : choice}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {requiresTypedValue ? (
+        <form
+          className="mm-chat-input-form"
+          onSubmit={event => {
+            event.preventDefault()
+            const response = value.trim()
+
+            if (response) {
+              onRespond(response)
+              setValue('')
+            }
+          }}
+        >
+          <input
+            aria-label={input.kind === 'clarify' ? 'Answer MacMan' : 'Private response'}
+            autoComplete="off"
+            onChange={event => setValue(event.currentTarget.value)}
+            type={input.kind === 'secret' || input.kind === 'sudo' ? 'password' : 'text'}
+            value={value}
+          />
+          <button disabled={!value.trim()} type="submit">Continue</button>
+        </form>
+      ) : null}
+    </section>
+  )
+}
 
 export function MacManChat({ client, loadModelCatalog, onActiveModelChange, onManageModels }: MacManChatProps) {
   const [draft, setDraft] = useState('')
@@ -75,10 +128,17 @@ export function MacManChat({ client, loadModelCatalog, onActiveModelChange, onMa
           <h1>MacMan</h1>
           <p>One continuous conversation on this Mac.</p>
         </div>
-        <span className={`mm-chat-status mm-chat-status--${snapshot.status}`}>
-          <span />
-          {snapshot.status === 'ready' ? 'Ready' : snapshot.status === 'connecting' ? 'Connecting' : 'Offline'}
-        </span>
+        <div className="mm-chat-header-actions">
+          {snapshot.busy ? (
+            <button aria-label="Stop current task" className="mm-chat-stop" onClick={() => void client.interrupt()} type="button">
+              <IconPlayerStop aria-hidden size={13} stroke={2} /> Stop
+            </button>
+          ) : null}
+          <span className={`mm-chat-status mm-chat-status--${snapshot.status}`}>
+            <span />
+            {snapshot.status === 'ready' ? 'Ready' : snapshot.status === 'connecting' ? 'Connecting' : 'Offline'}
+          </span>
+        </div>
       </header>
 
       <div aria-live="polite" className="mm-chat-transcript" ref={transcriptRef}>
@@ -128,6 +188,13 @@ export function MacManChat({ client, loadModelCatalog, onActiveModelChange, onMa
                   ))}
                 </ul>
               </section>
+            ) : null}
+            {snapshot.pendingInput ? (
+              <MacManInputCard
+                input={snapshot.pendingInput}
+                key={`${snapshot.pendingInput.kind}-${snapshot.pendingInput.requestId ?? 'current'}`}
+                onRespond={value => void client.respondToInput(value)}
+              />
             ) : null}
             {snapshot.busy ? <MacManThinkingMark /> : null}
           </div>
