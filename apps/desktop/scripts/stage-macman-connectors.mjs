@@ -190,9 +190,33 @@ function stageWhatsApp(destinationRoot) {
   return relative(destinationRoot, join(destination, 'bridge.js')).split(sep).join('/')
 }
 
+export function stageMacManGmailOAuthClient(sourcePath, destinationRoot) {
+  let payload
+
+  try {
+    payload = JSON.parse(readFileSync(resolve(sourcePath), 'utf8'))
+  } catch (error) {
+    throw new Error(`Could not read the MacMan Google OAuth identity: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
+  const installed = payload?.installed
+  const required = ['auth_uri', 'client_id', 'client_secret', 'token_uri']
+
+  if (!installed || required.some(field => typeof installed[field] !== 'string' || !installed[field].trim())) {
+    throw new Error('MacMan requires a Google desktop OAuth client JSON with an installed application identity')
+  }
+
+  const destination = join(destinationRoot, 'gmail', 'oauth-client.json')
+  mkdirSync(dirname(destination), { mode: 0o755, recursive: true })
+  writeFileSync(destination, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 })
+
+  return destination
+}
+
 export async function stageMacManConnectors({
   arch = process.arch,
   destinationRoot = join(desktopRoot, 'build', 'macman-connectors'),
+  gmailOAuthClientPath = process.env.MACMAN_GOOGLE_OAUTH_CLIENT_JSON?.trim() || null,
   platform = process.platform
 } = {}) {
   const artifacts = selectMacManConnectorArtifacts({ arch, platform })
@@ -217,6 +241,10 @@ export async function stageMacManConnectors({
         sha256: artifact.sha256 ?? null,
         version: artifact.version
       })
+    }
+
+    if (gmailOAuthClientPath) {
+      stageMacManGmailOAuthClient(gmailOAuthClientPath, destinationRoot)
     }
 
     writeFileSync(join(destinationRoot, 'manifest.json'), `${JSON.stringify({ connectors: manifest }, null, 2)}\n`, {
