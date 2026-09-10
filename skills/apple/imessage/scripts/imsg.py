@@ -247,6 +247,36 @@ def _write_receipt(destination: Path, release: ReleaseSpec) -> None:
     )
 
 
+def _publish_stable_command(binary: Path, capability_root: Path) -> None:
+    """Expose the managed binary on Hermes's terminal PATH.
+
+    Existing non-symlink commands are user-owned and remain untouched. Managed
+    symlinks are atomically installed or repaired while the capability lock is
+    held, so an older conversation that probes ``command -v imsg`` sees the
+    prepared capability immediately.
+    """
+    command_dir = capability_root.parent / "bin"
+    command_dir.mkdir(parents=True, exist_ok=True)
+    command = command_dir / "imsg"
+
+    if command.exists() and not command.is_symlink():
+        return
+    if command.is_symlink():
+        try:
+            if command.resolve(strict=True) == binary.resolve(strict=True):
+                return
+        except OSError:
+            pass
+
+    temporary = command_dir / f".imsg-link-{os.getpid()}"
+    try:
+        temporary.unlink(missing_ok=True)
+        temporary.symlink_to(binary.resolve(strict=True))
+        os.replace(temporary, command)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def ensure_imsg(
     capability_root: Path | None = None,
     *,
@@ -270,6 +300,7 @@ def ensure_imsg(
         if _install_is_valid(
             install_dir, release, signature_checker, version_reader
         ):
+            _publish_stable_command(binary, root)
             return binary
 
         print("Preparing Messages support...", file=stderr, flush=True)
@@ -313,6 +344,7 @@ def ensure_imsg(
                 shutil.rmtree(install_dir)
             os.replace(staged_install, install_dir)
 
+        _publish_stable_command(binary, root)
         print("Messages support ready.", file=stderr, flush=True)
         return binary
 
