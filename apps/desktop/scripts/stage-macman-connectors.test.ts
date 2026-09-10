@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { test } from 'vitest'
 
 import {
   MACMAN_CONNECTOR_ARTIFACTS,
   selectMacManConnectorArtifacts,
+  stageMacManGmailOAuthClient,
   verifyMacManConnectorArtifact
 } from './stage-macman-connectors.mjs'
 
@@ -51,4 +55,31 @@ test('the pinned catalog contains both supported Mac architectures', () => {
     () => selectMacManConnectorArtifacts({ arch: 'arm64', platform: 'linux' }),
     /macOS-only/i
   )
+})
+
+test('release packaging accepts only a Google desktop OAuth identity and stages it privately', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'macman-google-oauth-'))
+  const source = join(directory, 'desktop-client.json')
+  const destination = join(directory, 'bundle')
+  const identity = {
+    installed: {
+      auth_uri: 'https://accounts.google.com/o/oauth2/auth',
+      client_id: 'macman.apps.googleusercontent.com',
+      client_secret: 'build-secret',
+      token_uri: 'https://oauth2.googleapis.com/token'
+    }
+  }
+
+  try {
+    writeFileSync(source, JSON.stringify(identity))
+    const staged = stageMacManGmailOAuthClient(source, destination)
+
+    assert.deepEqual(JSON.parse(readFileSync(staged, 'utf8')), identity)
+    assert.equal(statSync(staged).mode & 0o777, 0o600)
+
+    writeFileSync(source, JSON.stringify({ web: identity.installed }))
+    assert.throws(() => stageMacManGmailOAuthClient(source, destination), /desktop OAuth client/i)
+  } finally {
+    rmSync(directory, { force: true, recursive: true })
+  }
 })
