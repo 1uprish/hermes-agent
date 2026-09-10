@@ -72,8 +72,8 @@ export function resolveBundledCuaDriver(resourcesPath: string): string {
 }
 
 /**
- * Starts host-owned permission onboarding and supervises the private driver.
- * The timer only watches while a grant is missing and never re-opens Settings.
+ * Supervises MacMan's private driver from current permission truth. Startup
+ * never prompts; only an explicit renderer action may request access.
  */
 export async function startMacManCuaPermissionService(options: { log: RuntimeLogger; resourcesPath: string }) {
   const binaryPath = resolveBundledCuaDriver(options.resourcesPath)
@@ -138,7 +138,7 @@ export async function startMacManCuaPermissionService(options: { log: RuntimeLog
     }
   }
 
-  const initial = await controller.requestPermissionsAndStart()
+  const initial = await controller.refreshPermissions()
   describe(initial)
 
   if (initial.state === 'permission-required') {

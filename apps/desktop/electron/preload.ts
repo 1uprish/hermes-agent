@@ -12,6 +12,12 @@ const hudWindowing = ipcRenderer.sendSync('hermes:hud:windowing')
 const hudNativeDrag = hudWindowing?.nativeDrag === true
 const launchFlags = ipcRenderer.sendSync('hermes:launch-flags')
 
+contextBridge.exposeInMainWorld('macManNative', {
+  openSystemSettings: permission => ipcRenderer.invoke('macman:native:open-system-settings', permission),
+  requestPermission: permission => ipcRenderer.invoke('macman:native:request-permission', permission),
+  snapshot: () => ipcRenderer.invoke('macman:native:snapshot')
+})
+
 contextBridge.exposeInMainWorld('hermesDesktop', {
   glassSupported: translucencySupport?.glass === true,
   translucencySupported: translucencySupport?.translucency === true,

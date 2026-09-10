@@ -228,6 +228,18 @@ export function createMacManCuaHostController(dependencies: MacManCuaHostDepende
       })
     },
 
+    requestPermissionsFromUserAction(): Promise<MacManCuaHostSnapshot> {
+      return serialize(async () => {
+        const requested = dependencies.requestPermissions()
+
+        if (!requested.screenRecording) {
+          await dependencies.openScreenRecordingSettings()
+        }
+
+        return applyPermissionStatus(requested)
+      })
+    },
+
     refreshPermissions(): Promise<MacManCuaHostSnapshot> {
       return serialize(() => applyPermissionStatus(dependencies.readPermissions()))
     },

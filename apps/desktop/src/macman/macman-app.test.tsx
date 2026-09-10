@@ -16,7 +16,8 @@ const snapshot: MacManSnapshot = {
     automation: 'per-app',
     fullDiskAccess: 'optional',
     location: 'optional'
-  }
+  },
+  wrapper: 'disconnected'
 }
 
 afterEach(cleanup)

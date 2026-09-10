@@ -232,11 +232,13 @@ import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
 import { resolveHudWindowing } from './hud-windowing'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
+import type { MacManCuaPermissionService } from './macman-cua-runtime'
 import {
   applicationNameForDistribution,
   readMacManDistribution,
   userDataPathForDistribution
 } from './macman-distribution'
+import { createMacManNativeBridgeController } from './macman-native-bridge'
 import { ensureMainWindow } from './main-window-lifecycle'
 import {
   assertManagedUpdatePreflightClear,
@@ -1662,7 +1664,7 @@ let remoteReauthFailure = null
 // Active first-launch install, so the renderer's Cancel button (and app quit)
 // can abort the in-flight install.sh/ps1 instead of leaving it running.
 let bootstrapAbortController = null
-let macManCuaPermissionService: { stop(): Promise<void> } | null = null
+let macManCuaPermissionService: MacManCuaPermissionService | null = null
 let macManCuaPermissionStart: Promise<void> | null = null
 
 function startMacManCuaPermissionRuntime(): Promise<void> {
@@ -1702,6 +1704,35 @@ async function stopMacManCuaPermissionRuntime(): Promise<void> {
     await service.stop()
   }
 }
+
+const macManNativeBridgeController = createMacManNativeBridgeController({
+  async getCuaController() {
+    if (!MACMAN_DISTRIBUTION) {
+      return null
+    }
+
+    await startMacManCuaPermissionRuntime()
+
+    return macManCuaPermissionService?.controller ?? null
+  },
+  getMicrophoneStatus() {
+    if (!IS_MAC || typeof systemPreferences.getMediaAccessStatus !== 'function') {
+      return 'unknown'
+    }
+
+    return systemPreferences.getMediaAccessStatus('microphone')
+  },
+  openExternal(url) {
+    return shell.openExternal(url)
+  },
+  async requestMicrophone() {
+    if (!IS_MAC || typeof systemPreferences.askForMediaAccess !== 'function') {
+      return false
+    }
+
+    return systemPreferences.askForMediaAccess('microphone')
+  }
+})
 
 // Explicit "the user asked for a repair" flag. Repair used to signal intent by
 // deleting the bootstrap marker, which stranded healthy installs whose only
@@ -16286,6 +16317,24 @@ ipcMain.handle('hermes:requestMicrophoneAccess', async () => {
   }
 
   return systemPreferences.askForMediaAccess('microphone')
+})
+
+ipcMain.handle('macman:native:snapshot', () => macManNativeBridgeController.snapshot())
+
+ipcMain.handle('macman:native:request-permission', (_event, permission) => {
+  if (!MACMAN_DISTRIBUTION) {
+    throw new Error('MacMan native permissions are unavailable in this distribution')
+  }
+
+  return macManNativeBridgeController.requestPermission(permission)
+})
+
+ipcMain.handle('macman:native:open-system-settings', (_event, permission) => {
+  if (!MACMAN_DISTRIBUTION) {
+    throw new Error('MacMan native permissions are unavailable in this distribution')
+  }
+
+  return macManNativeBridgeController.openSystemSettings(permission)
 })
 
 // read_window_below tool: which OS window is directly underneath this one.

@@ -162,6 +162,7 @@ test('an explicit user retry can reopen Screen Recording settings without starti
   assert.equal(fake.events.includes('host:create'), false)
 
   fake.grantPermissions()
+
   const [first, concurrent] = await Promise.all([
     controller.requestPermissionsFromUserAction(),
     controller.requestPermissionsFromUserAction()

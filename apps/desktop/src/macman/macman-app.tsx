@@ -23,31 +23,9 @@ import {
 } from '@tabler/icons-react'
 import { type ComponentType, type ReactNode, useMemo, useState } from 'react'
 
-export type MacManPermissionId =
-  | 'accessibility'
-  | 'screenRecording'
-  | 'microphone'
-  | 'notifications'
-  | 'calendar'
-  | 'reminders'
-  | 'contacts'
-  | 'automation'
-  | 'fullDiskAccess'
-  | 'location'
+import type { MacManPermissionId, MacManPermissionStatus, MacManSnapshot } from './native-contract'
 
-export type MacManPermissionStatus =
-  | 'granted'
-  | 'not-granted'
-  | 'ask-when-used'
-  | 'per-app'
-  | 'optional'
-  | 'unavailable'
-
-export type MacManSnapshot = {
-  model: 'connected' | 'not-connected' | 'checking'
-  permissions: Record<MacManPermissionId, MacManPermissionStatus>
-  wrapper?: 'connected' | 'checking' | 'disconnected'
-}
+export type { MacManPermissionId, MacManPermissionStatus, MacManSnapshot } from './native-contract'
 
 export type MacManView =
   | 'setup'
@@ -93,7 +71,8 @@ export const DEFAULT_MACMAN_SNAPSHOT: MacManSnapshot = {
     automation: 'per-app',
     fullDiskAccess: 'optional',
     location: 'optional'
-  }
+  },
+  wrapper: 'disconnected'
 }
 
 const PERMISSIONS: PermissionDefinition[] = [
@@ -671,7 +650,7 @@ export function MacManApp({
   snapshot = DEFAULT_MACMAN_SNAPSHOT
 }: MacManAppProps) {
   const [activeView, setActiveView] = useState<MacManView>(initialView)
-  const wrapperStatus = snapshot.wrapper ?? 'disconnected'
+  const wrapperStatus = snapshot.wrapper
 
   const activeLabel = useMemo(
     () => NAV_GROUPS.flatMap(group => group.items).find(item => item.id === activeView)?.label ?? 'MacMan',
