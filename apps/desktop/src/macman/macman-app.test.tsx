@@ -90,21 +90,33 @@ describe('standalone MacMan frontend', () => {
 
   it('routes every command-style settings button to a real owner', () => {
     const onSettingsAction = vi.fn()
-    const { rerender } = render(
-      <MacManApp initialView="general" onSettingsAction={onSettingsAction} snapshot={snapshot} />
-    )
+    render(<MacManApp initialView="general" onSettingsAction={onSettingsAction} snapshot={snapshot} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
     expect(onSettingsAction).toHaveBeenCalledWith('check-updates')
 
-    rerender(<MacManApp initialView="privacy" onSettingsAction={onSettingsAction} snapshot={snapshot} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Privacy & Safety' }))
     fireEvent.click(screen.getByRole('button', { name: 'Manage exclusions' }))
     expect(onSettingsAction).toHaveBeenCalledWith('manage-exclusions')
 
-    rerender(<MacManApp initialView="advanced" onSettingsAction={onSettingsAction} snapshot={snapshot} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Connections' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Set up Messages' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Set up Calendar' }))
+    expect(onSettingsAction).toHaveBeenCalledWith('connect-messages')
+    expect(onSettingsAction).toHaveBeenCalledWith('connect-calendar')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }))
     fireEvent.click(screen.getByRole('button', { name: 'Open logs' }))
     fireEvent.click(screen.getByRole('button', { name: 'Export MacMan data' }))
     expect(onSettingsAction).toHaveBeenCalledWith('open-logs')
     expect(onSettingsAction).toHaveBeenCalledWith('export-data')
+  })
+
+  it('leaves setup through a real destination even when the parent has no completion handler', () => {
+    render(<MacManApp snapshot={snapshot} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Finish later' }))
+
+    expect(screen.getByRole('heading', { name: 'General' })).toBeTruthy()
   })
 })
