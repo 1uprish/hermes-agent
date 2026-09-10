@@ -7,7 +7,7 @@ import type { MacManConnectionId } from './macman-connections-controller'
 const MAX_CONNECTOR_OUTPUT_BYTES = 1024 * 1024
 
 const CONNECTOR_PATHS: Record<MacManConnectionId, (arch: string) => string[]> = {
-  gmail: arch => ['gmail', arch, 'gog'],
+  gmail: () => ['gmail', 'gog'],
   imessage: () => ['imessage', 'universal', 'imessage-cli'],
   whatsapp: () => ['whatsapp', 'universal', 'bridge.js']
 }

@@ -54,8 +54,8 @@ module.exports = {
     ...base.mac,
     binaries: [
       'Contents/Resources/cua-driver',
-      'Contents/Resources/macman-connectors/**/gog',
-      'Contents/Resources/macman-connectors/**/imessage-cli'
+      'Contents/Resources/macman-connectors/gmail/gog',
+      'Contents/Resources/macman-connectors/imessage/universal/imessage-cli'
     ],
     // Local directory builds need a structurally valid signature for TCC and
     // launch testing. Release builds leave identity discovery untouched so a

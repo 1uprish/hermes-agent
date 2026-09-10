@@ -154,7 +154,10 @@ async function stageReleaseArtifact(artifact, destinationRoot, temporaryRoot) {
     throw new Error(`${artifact.id} archive did not contain ${artifact.binary}`)
   }
 
-  const destination = join(destinationRoot, artifact.id, artifact.arch, artifact.binary)
+  const destination =
+    artifact.id === 'gmail'
+      ? join(destinationRoot, artifact.id, artifact.binary)
+      : join(destinationRoot, artifact.id, artifact.arch, artifact.binary)
   mkdirSync(dirname(destination), { mode: 0o755, recursive: true })
   cpSync(binary, destination)
   chmodSync(destination, 0o755)
