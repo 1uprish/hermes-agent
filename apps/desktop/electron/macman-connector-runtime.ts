@@ -26,6 +26,23 @@ export function resolveMacManConnectorExecutable(
   return existsSync(executable) ? executable : null
 }
 
+export function macManConnectorBackendEnvironment(
+  resourcesPath: string,
+  dataRoot: string,
+  arch = process.arch
+): { GOG_HOME: string; MACMAN_IMESSAGE_DATA_DIR: string; pathEntries: string[] } {
+  const executables = [
+    resolveMacManConnectorExecutable(resourcesPath, 'gmail', arch),
+    resolveMacManConnectorExecutable(resourcesPath, 'imessage', arch)
+  ]
+
+  return {
+    GOG_HOME: join(dataRoot, 'gmail'),
+    MACMAN_IMESSAGE_DATA_DIR: join(dataRoot, 'imessage'),
+    pathEntries: executables.flatMap(executable => (executable ? [join(executable, '..')] : []))
+  }
+}
+
 export function runMacManConnector(
   executable: string,
   args: string[],

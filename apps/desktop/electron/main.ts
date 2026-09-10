@@ -235,6 +235,7 @@ import { resolveHudWindowing } from './hud-windowing'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
 import type { MacManCuaPermissionService } from './macman-cua-runtime'
 import {
+  macManConnectorBackendEnvironment,
   macManConnectorResourcesRoot,
   resolveMacManConnectorExecutable,
   runMacManConnector
@@ -1788,6 +1789,9 @@ const MACMAN_CONNECTOR_RESOURCES_ROOT = macManConnectorResourcesRoot(
   app.isPackaged
 )
 const MACMAN_CONNECTION_DATA_ROOT = path.join(app.getPath('userData'), 'connections')
+const MACMAN_CONNECTOR_BACKEND_ENV = MACMAN_DISTRIBUTION
+  ? macManConnectorBackendEnvironment(MACMAN_CONNECTOR_RESOURCES_ROOT, MACMAN_CONNECTION_DATA_ROOT)
+  : null
 const macManConnectionStore = createMacManConnectionStore({
   databasePath: path.join(MACMAN_CONNECTION_DATA_ROOT, 'connections.sqlite3')
 })
@@ -5120,11 +5124,20 @@ function createPythonBackend(root, label, backendArgs, options: any = {}) {
     label,
     command,
     args: ['-m', 'hermes_cli.main', ...backendArgs],
-    env: buildDesktopBackendEnv({
-      hermesHome: HERMES_HOME,
-      pythonPathEntries: [root, ...getVenvSitePackagesEntries(venvRoot)],
-      venvRoot
-    }),
+    env: {
+      ...buildDesktopBackendEnv({
+        hermesHome: HERMES_HOME,
+        prependPathEntries: MACMAN_CONNECTOR_BACKEND_ENV?.pathEntries,
+        pythonPathEntries: [root, ...getVenvSitePackagesEntries(venvRoot)],
+        venvRoot
+      }),
+      ...(MACMAN_CONNECTOR_BACKEND_ENV
+        ? {
+            GOG_HOME: MACMAN_CONNECTOR_BACKEND_ENV.GOG_HOME,
+            MACMAN_IMESSAGE_DATA_DIR: MACMAN_CONNECTOR_BACKEND_ENV.MACMAN_IMESSAGE_DATA_DIR
+          }
+        : {})
+    },
     root,
     bootstrap: Boolean(options.bootstrap),
     shell: false
@@ -5144,11 +5157,20 @@ function createActiveBackend(backendArgs) {
     label: `Hermes at ${ACTIVE_HERMES_ROOT}`,
     command,
     args: ['-m', 'hermes_cli.main', ...backendArgs],
-    env: buildDesktopBackendEnv({
-      hermesHome: HERMES_HOME,
-      pythonPathEntries: [ACTIVE_HERMES_ROOT, ...getVenvSitePackagesEntries(VENV_ROOT)],
-      venvRoot: VENV_ROOT
-    }),
+    env: {
+      ...buildDesktopBackendEnv({
+        hermesHome: HERMES_HOME,
+        prependPathEntries: MACMAN_CONNECTOR_BACKEND_ENV?.pathEntries,
+        pythonPathEntries: [ACTIVE_HERMES_ROOT, ...getVenvSitePackagesEntries(VENV_ROOT)],
+        venvRoot: VENV_ROOT
+      }),
+      ...(MACMAN_CONNECTOR_BACKEND_ENV
+        ? {
+            GOG_HOME: MACMAN_CONNECTOR_BACKEND_ENV.GOG_HOME,
+            MACMAN_IMESSAGE_DATA_DIR: MACMAN_CONNECTOR_BACKEND_ENV.MACMAN_IMESSAGE_DATA_DIR
+          }
+        : {})
+    },
     root: ACTIVE_HERMES_ROOT,
     bootstrap: true,
     shell: false
