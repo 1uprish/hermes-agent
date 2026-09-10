@@ -30,10 +30,21 @@ function hashPoint(x: number, y: number): number {
 function thinkingMorphAt(seconds: number): number {
   const local = seconds % CYCLE_SECONDS
 
-  if (local < 0.45) return 1
-  if (local < 1.65) return 1 - smootherStep((local - 0.45) / 1.2)
-  if (local < 4.6) return 0
-  if (local < 5.9) return smootherStep((local - 4.6) / 1.3)
+  if (local < 0.45) {
+    return 1
+  }
+
+  if (local < 1.65) {
+    return 1 - smootherStep((local - 0.45) / 1.2)
+  }
+
+  if (local < 4.6) {
+    return 0
+  }
+
+  if (local < 5.9) {
+    return smootherStep((local - 4.6) / 1.3)
+  }
 
   return 1
 }
@@ -45,11 +56,14 @@ function sampleMark(image: HTMLImageElement): MarkPoint[] {
 
   const context = source.getContext('2d', { willReadFrequently: true })
 
-  if (!context) return []
+  if (!context) {
+    return []
+  }
 
   context.drawImage(image, 0, 0, SAMPLE_SIZE, SAMPLE_SIZE)
 
   const { data } = context.getImageData(0, 0, SAMPLE_SIZE, SAMPLE_SIZE)
+
   const toneAt = (x: number, y: number) => {
     const offset = (y * SAMPLE_SIZE + x) * 4
     const alpha = data[offset + 3] / 255
@@ -63,6 +77,7 @@ function sampleMark(image: HTMLImageElement): MarkPoint[] {
   for (let y = 1; y < SAMPLE_SIZE - 1; y += 1) {
     for (let x = 1; x < SAMPLE_SIZE - 1; x += 1) {
       const center = toneAt(x, y)
+
       const edge = Math.max(
         Math.abs(center - toneAt(x - 1, y)),
         Math.abs(center - toneAt(x + 1, y)),
@@ -138,28 +153,36 @@ export function MacManThinkingMark() {
   useEffect(() => {
     const canvas = canvasRef.current
 
-    if (!canvas) return
+    if (!canvas) {
+      return
+    }
 
     const reduceMotion =
       typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
-    if (reduceMotion) return
+    if (reduceMotion) {
+      return
+    }
 
     const image = new Image()
     let animationFrame = 0
     let disposed = false
     let visible = true
     let cleanupVisibility: (() => void) | undefined
-    const startedAt = performance.now()
 
     image.decoding = 'async'
+
     image.onload = () => {
-      if (disposed) return
+      if (disposed) {
+        return
+      }
 
       const context = canvas.getContext('2d')
       const points = sampleMark(image)
 
-      if (!context || points.length === 0) return
+      if (!context || points.length === 0) {
+        return
+      }
 
       const pixelRatio = Math.min(2, window.devicePixelRatio || 1)
       canvas.width = Math.round(MARK_SIZE * pixelRatio)
@@ -167,6 +190,8 @@ export function MacManThinkingMark() {
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
 
       const color = getComputedStyle(canvas).color
+      const startedAt = performance.now()
+
       const render = (now: number) => {
         paintFrame(context, image, points, (now - startedAt) / 1000, color)
 
@@ -174,6 +199,7 @@ export function MacManThinkingMark() {
           animationFrame = requestAnimationFrame(render)
         }
       }
+
       const start = () => {
         cancelAnimationFrame(animationFrame)
         animationFrame = requestAnimationFrame(render)
@@ -189,15 +215,21 @@ export function MacManThinkingMark() {
           : new IntersectionObserver(([entry]) => {
               visible = entry.isIntersecting
 
-              if (visible && document.visibilityState !== 'hidden') start()
-              else cancelAnimationFrame(animationFrame)
+              if (visible && document.visibilityState !== 'hidden') {
+                start()
+              } else {
+                cancelAnimationFrame(animationFrame)
+              }
             })
 
       visibilityObserver?.observe(canvas)
 
       const handleDocumentVisibility = () => {
-        if (document.visibilityState === 'hidden') cancelAnimationFrame(animationFrame)
-        else if (visible) start()
+        if (document.visibilityState === 'hidden') {
+          cancelAnimationFrame(animationFrame)
+        } else if (visible) {
+          start()
+        }
       }
 
       document.addEventListener('visibilitychange', handleDocumentVisibility)
@@ -207,6 +239,7 @@ export function MacManThinkingMark() {
         document.removeEventListener('visibilitychange', handleDocumentVisibility)
       }
     }
+
     image.src = MARK_SRC
 
     return () => {
