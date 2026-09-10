@@ -42,19 +42,19 @@ test('resource resolution follows staged output in development and packaged reso
 
 test('runtime resolution selects the host Gmail binary and universal local connectors', () => {
   const root = resourcesRoot()
-  const gmail = executable(root, 'macman-connectors/gmail/arm64/gog')
+  const gmail = executable(root, 'macman-connectors/gmail/gog')
   const imessage = executable(root, 'macman-connectors/imessage/universal/imessage-cli')
   const whatsapp = executable(root, 'macman-connectors/whatsapp/universal/bridge.js')
 
   assert.equal(resolveMacManConnectorExecutable(root, 'gmail', 'arm64'), gmail)
   assert.equal(resolveMacManConnectorExecutable(root, 'imessage', 'arm64'), imessage)
   assert.equal(resolveMacManConnectorExecutable(root, 'whatsapp', 'arm64'), whatsapp)
-  assert.equal(resolveMacManConnectorExecutable(root, 'gmail', 'x64'), null)
+  assert.equal(resolveMacManConnectorExecutable(root, 'gmail', 'x64'), gmail)
 })
 
 test('MacMan local chat receives only existing connector paths and private state locations', () => {
   const root = resourcesRoot()
-  const gmail = executable(root, 'macman-connectors/gmail/arm64/gog')
+  const gmail = executable(root, 'macman-connectors/gmail/gog')
   const imessage = executable(root, 'macman-connectors/imessage/universal/imessage-cli')
   const dataRoot = join(root, 'user-data')
 
