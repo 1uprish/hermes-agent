@@ -500,7 +500,7 @@ export function ModelCatalogMenu({
                         : null
 
                     const isCurrent = activeId !== null
-                    const name = modelDisplayParts(family.id).name
+                    const { name, tag } = modelDisplayParts(family.id)
                     const caps = group.provider.capabilities?.[family.id]
 
                     // Managed local model loading into memory right now:
@@ -524,6 +524,7 @@ export function ModelCatalogMenu({
                     )
 
                     const meta = [
+                      tag || null,
                       fastControl.kind !== 'none' && fastControl.on ? copy.fast : null,
                       (caps?.reasoning ?? true) ? reasoningEffortLabel(effEffort || defaultEffort) : null
                     ]
