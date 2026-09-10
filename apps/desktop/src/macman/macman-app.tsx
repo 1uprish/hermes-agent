@@ -66,9 +66,9 @@ type PermissionDefinition = {
   level: PermissionLevel
   title: string
 }
-
 export type MacManAppProps = {
   chat?: ReactNode
+  connections?: ReactNode
   initialView?: MacManView
   onComplete?: () => void
   onOpenModelSetup?: () => void
@@ -573,6 +573,7 @@ function SettingRow({ action, description, title }: { action: ReactNode; descrip
 }
 
 function SettingsPage({
+  connections,
   memorySettings,
   notice,
   onMemorySettingChange,
@@ -580,6 +581,7 @@ function SettingsPage({
   view,
   wrapperStatus
 }: {
+  connections?: ReactNode
   memorySettings: MacManMemorySettings
   notice?: string
   onMemorySettingChange?: (setting: MacManMemorySetting, value: boolean) => void
@@ -642,6 +644,10 @@ function SettingsPage({
   }
 
   if (view === 'connections') {
+    if (connections) {
+      return connections
+    }
+
     return (
       <SettingsScaffold description="Connect the apps and accounts MacMan can work with." notice={notice} title="Connections">
         <SettingsGroup title="Apple apps">
@@ -858,6 +864,7 @@ function ConnectionRow({
 
 export function MacManApp({
   chat,
+  connections,
   initialView = 'setup',
   memorySettings = DEFAULT_MACMAN_MEMORY_SETTINGS,
   onComplete,
@@ -966,6 +973,7 @@ export function MacManApp({
           />
         ) : (
           <SettingsPage
+            connections={connections}
             memorySettings={memorySettings}
             notice={settingsNotice}
             onMemorySettingChange={onMemorySettingChange}

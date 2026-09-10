@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { DEFAULT_MACMAN_SNAPSHOT, MacManApp, type MacManSettingsAction } from './macman-app'
 import { MacManChat } from './macman-chat'
 import { createMacManChatClient } from './macman-chat-client'
+import { MacManConnections } from './macman-connections'
 import {
   DEFAULT_MACMAN_MEMORY_SETTINGS,
   ensureLocalMemory,
@@ -325,6 +326,7 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
             onManageModels={() => setModelSetupOpen(true)}
           />
         }
+        connections={bridge ? <MacManConnections bridge={bridge} /> : undefined}
         memorySettings={memorySettings}
         onMemorySettingChange={changeMemorySetting}
         onOpenModelSetup={() => setModelSetupOpen(true)}

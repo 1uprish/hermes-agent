@@ -602,6 +602,267 @@ button:focus-visible {
   white-space: nowrap;
 }
 
+.mm-connections-page {
+  max-width: 850px;
+}
+
+.mm-connections-list {
+  display: grid;
+  margin-top: 30px;
+  gap: 12px;
+}
+
+.mm-connection-card {
+  display: grid;
+  min-height: 132px;
+  padding: 20px;
+  border: 1px solid var(--mm-border);
+  border-radius: 14px;
+  background: var(--mm-card);
+  align-items: start;
+  gap: 16px;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.mm-connection-icon,
+.mm-connection-dialog-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  border-radius: 11px;
+  background: var(--mm-fill);
+  color: var(--mm-text-secondary);
+  place-items: center;
+}
+
+.mm-connection-icon--whatsapp {
+  background: color-mix(in srgb, #25d366 13%, var(--mm-fill));
+  color: color-mix(in srgb, #25d366 78%, var(--mm-text));
+}
+
+.mm-connection-icon--imessage {
+  background: color-mix(in srgb, var(--mm-accent) 13%, var(--mm-fill));
+  color: var(--mm-accent);
+}
+
+.mm-connection-icon--gmail {
+  background: color-mix(in srgb, #ea4335 11%, var(--mm-fill));
+  color: #d94b3f;
+}
+
+.mm-connection-titleline {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.mm-connection-titleline h2 {
+  margin: 1px 0 0;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.mm-connection-status {
+  display: inline-flex;
+  color: var(--mm-text-secondary);
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 580;
+}
+
+.mm-connection-status > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.mm-connection-status.is-connected {
+  color: var(--mm-green);
+}
+
+.mm-connection-status.is-attention,
+.mm-connection-status.is-needs-permission {
+  color: var(--mm-orange);
+}
+
+.mm-connection-status.is-unavailable {
+  color: var(--mm-red);
+}
+
+.mm-connection-account {
+  display: block;
+  margin-top: 5px;
+  color: var(--mm-text-secondary);
+  font-size: 11px;
+  font-weight: 520;
+}
+
+.mm-connection-copy p {
+  margin: 6px 0 0;
+  color: var(--mm-text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.mm-connection-capabilities {
+  display: flex;
+  margin-top: 13px;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mm-connection-capabilities span {
+  display: inline-flex;
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: var(--mm-fill);
+  color: var(--mm-text-secondary);
+  align-items: center;
+  gap: 3px;
+  font-size: 9.5px;
+}
+
+.mm-connections-error,
+.mm-connections-loading {
+  margin-top: 18px;
+  padding: 11px 13px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--mm-red) 9%, transparent);
+  color: var(--mm-red);
+  font-size: 11.5px;
+}
+
+.mm-connections-loading {
+  margin: 0;
+  background: var(--mm-fill);
+  color: var(--mm-text-secondary);
+}
+
+.mm-connection-dialog {
+  position: relative;
+  display: flex;
+  width: min(430px, calc(100vw - 48px));
+  padding: 28px;
+  border: 1px solid var(--mm-border);
+  border-radius: 17px;
+  background: var(--mm-bg);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.42);
+  align-items: center;
+  flex-direction: column;
+  text-align: center;
+}
+
+.mm-connection-dialog-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--mm-fill);
+  color: var(--mm-text-secondary);
+  place-items: center;
+}
+
+.mm-connection-dialog h2 {
+  margin: 14px 0 0;
+  font-size: 20px;
+  letter-spacing: -0.03em;
+}
+
+.mm-connection-dialog > p {
+  max-width: 350px;
+  margin: 9px 0 0;
+  color: var(--mm-text-secondary);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.mm-connection-dialog > small {
+  max-width: 330px;
+  margin-top: 14px;
+  color: var(--mm-text-secondary);
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
+.mm-whatsapp-qr {
+  display: grid;
+  width: 252px;
+  height: 252px;
+  margin-top: 20px;
+  padding: 8px;
+  border-radius: 14px;
+  background: #fff;
+  color: #606064;
+  place-items: center;
+  font-size: 11px;
+}
+
+.mm-whatsapp-qr img {
+  display: block;
+  width: 236px;
+  height: 236px;
+}
+
+.mm-gmail-dialog {
+  align-items: stretch;
+  text-align: left;
+}
+
+.mm-gmail-dialog .mm-connection-dialog-icon {
+  align-self: center;
+}
+
+.mm-gmail-dialog h2,
+.mm-gmail-dialog > p {
+  align-self: center;
+  text-align: center;
+}
+
+.mm-gmail-form {
+  display: grid;
+  margin-top: 22px;
+  gap: 8px;
+}
+
+.mm-gmail-form label {
+  color: var(--mm-text-secondary);
+  font-size: 10.5px;
+  font-weight: 580;
+}
+
+.mm-gmail-form input {
+  width: 100%;
+  height: 38px;
+  padding: 0 11px;
+  border: 1px solid var(--mm-border);
+  border-radius: 9px;
+  outline: none;
+  background: var(--mm-card);
+  color: var(--mm-text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.mm-gmail-form input:focus {
+  border-color: var(--mm-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mm-accent) 14%, transparent);
+}
+
+.mm-gmail-form .mm-button {
+  width: 100%;
+  margin-top: 5px;
+}
+
 .mm-modal-backdrop {
   position: fixed;
   z-index: 100;

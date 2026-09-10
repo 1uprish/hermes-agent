@@ -131,7 +131,18 @@ describe('MacMan wrapper root', () => {
   })
 
   it('routes command settings through the narrow native bridge', async () => {
-    const native = bridge()
+    const native = bridge({
+      getConnectionCatalog: vi.fn().mockResolvedValue({
+        connections: [
+          {
+            capabilities: ['read', 'search', 'send'],
+            id: 'imessage',
+            name: 'iMessage',
+            status: 'needs-permission'
+          }
+        ]
+      })
+    })
 
     render(<MacManRoot bridge={native} />)
     await screen.findByText('Wrapper connected')
@@ -140,14 +151,8 @@ describe('MacMan wrapper root', () => {
     await waitFor(() => expect(native.checkForUpdates).toHaveBeenCalledOnce())
 
     fireEvent.click(screen.getByRole('button', { name: 'Connections' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Set up Messages' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Set up Calendar' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Set up Reminders' }))
-    await waitFor(() => {
-      expect(native.requestPermission).toHaveBeenCalledWith('fullDiskAccess')
-      expect(native.requestPermission).toHaveBeenCalledWith('calendar')
-      expect(native.requestPermission).toHaveBeenCalledWith('reminders')
-    })
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up iMessage' }))
+    await waitFor(() => expect(native.authorizeIMessage).toHaveBeenCalledOnce())
 
     fireEvent.click(screen.getByRole('button', { name: 'Advanced' }))
     fireEvent.click(screen.getByRole('button', { name: 'Open logs' }))

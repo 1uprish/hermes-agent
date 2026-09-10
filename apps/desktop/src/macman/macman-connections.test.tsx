@@ -95,8 +95,7 @@ describe('MacMan first-class connections', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Connect WhatsApp' }))
 
     expect(await screen.findByRole('dialog', { name: 'Connect WhatsApp' })).toBeTruthy()
-    expect(await screen.findByAltText('WhatsApp pairing code')).toHaveAttribute(
-      'src',
+    expect((await screen.findByAltText('WhatsApp pairing code')).getAttribute('src')).toBe(
       'data:image/png;base64,macman-qr'
     )
 
