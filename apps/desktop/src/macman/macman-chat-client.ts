@@ -289,6 +289,7 @@ function errorMessage(error: unknown): string {
 class MacManChatGatewayClient implements MacManChatClient {
   private gateway?: MacManChatTransport
   private connectFlight?: Promise<void>
+  private connectionGeneration = 0
   private listeners = new Set<(snapshot: MacManChatSnapshot) => void>()
   private runtimeSessionId?: string
   private state: MacManChatSnapshot = { busy: false, messages: [], status: 'connecting' }
@@ -300,7 +301,7 @@ class MacManChatGatewayClient implements MacManChatClient {
   ) {}
 
   connect(): Promise<void> {
-    if (this.state.status === 'ready') {
+    if (this.state.status === 'ready' && this.gateway && this.runtimeSessionId) {
       return Promise.resolve()
     }
 
@@ -309,19 +310,29 @@ class MacManChatGatewayClient implements MacManChatClient {
     }
 
     this.publish({ ...this.state, error: undefined, status: 'connecting' })
-    this.connectFlight = this.open().finally(() => {
-      this.connectFlight = undefined
+
+    const generation = ++this.connectionGeneration
+
+    const flight = this.open(generation).finally(() => {
+      if (this.connectFlight === flight) {
+        this.connectFlight = undefined
+      }
     })
 
-    return this.connectFlight
+    this.connectFlight = flight
+
+    return flight
   }
 
   dispose(): void {
+    this.connectionGeneration += 1
+    this.connectFlight = undefined
     const gateway = this.gateway
     this.gateway = undefined
     this.runtimeSessionId = undefined
     this.streamMessageId = undefined
     gateway?.close()
+    this.publish({ ...this.state, busy: false, error: undefined, status: 'connecting' })
   }
 
   getSnapshot(): MacManChatSnapshot {
@@ -434,7 +445,7 @@ class MacManChatGatewayClient implements MacManChatClient {
     }
   }
 
-  private async open(): Promise<void> {
+  private async open(generation: number): Promise<void> {
     if (!this.host) {
       this.publish({ ...this.state, error: 'The MacMan chat service is not available.', status: 'error' })
 
@@ -469,6 +480,13 @@ class MacManChatGatewayClient implements MacManChatClient {
         }
       })
       await gateway.connect(wsUrl)
+
+      if (generation !== this.connectionGeneration) {
+        gateway.close()
+
+        return
+      }
+
       this.gateway = gateway
 
       const listing = await gateway.request<{ sessions?: StoredSessionRow[] }>('session.list', {
@@ -492,6 +510,12 @@ class MacManChatGatewayClient implements MacManChatClient {
             title: MACMAN_CHAT_TITLE
           })
 
+      if (generation !== this.connectionGeneration) {
+        gateway.close()
+
+        return
+      }
+
       this.runtimeSessionId = session.session_id
       this.publish({
         busy: false,
@@ -500,6 +524,10 @@ class MacManChatGatewayClient implements MacManChatClient {
         status: 'ready'
       })
     } catch (error) {
+      if (generation !== this.connectionGeneration) {
+        return
+      }
+
       this.gateway?.close()
       this.gateway = undefined
       this.publish({ ...this.state, busy: false, error: errorMessage(error), status: 'error' })

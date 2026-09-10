@@ -79,6 +79,76 @@ describe('MacMan chat session continuity', () => {
     expect(latest).toMatchObject({ busy: false, error: 'Connection dropped.', status: 'error' })
   })
 
+  it('reconnects to the durable session after the chat view is left and reopened', async () => {
+    const transport: MacManChatTransport = {
+      close: vi.fn(),
+      connect: vi.fn().mockResolvedValue(undefined),
+      onEvent: vi.fn(() => () => undefined),
+      request: vi.fn(async (method: string) => {
+        if (method === 'session.list') {
+          return { sessions: [{ id: 'stored-chat', title: 'MacMan Chat' }] }
+        }
+
+        return { messages: [], session_id: 'runtime-chat' }
+      }) as MacManChatTransport['request']
+    }
+
+    const client = createMacManChatClient(
+      {
+        getChatConnection: vi.fn().mockResolvedValue({ authMode: 'token', wsUrl: 'ws://macman.test/ws' }),
+        getFreshChatConnection: vi.fn()
+      },
+      () => transport
+    )
+
+    await client.connect()
+    client.dispose()
+    expect(client.getSnapshot().status).toBe('connecting')
+
+    await client.connect()
+
+    expect(transport.connect).toHaveBeenCalledTimes(2)
+    expect(transport.request).toHaveBeenCalledWith('session.resume', {
+      cols: 96,
+      session_id: 'stored-chat'
+    })
+    expect(client.getSnapshot().status).toBe('ready')
+  })
+
+  it('does not finish a stale connection after the chat view is closed', async () => {
+    let finishConnect: (() => void) | undefined
+
+    const transport: MacManChatTransport = {
+      close: vi.fn(),
+      connect: vi.fn(
+        () =>
+          new Promise<void>(resolve => {
+            finishConnect = resolve
+          })
+      ),
+      onEvent: vi.fn(() => () => undefined),
+      request: vi.fn()
+    }
+
+    const client = createMacManChatClient(
+      {
+        getChatConnection: vi.fn().mockResolvedValue({ authMode: 'token', wsUrl: 'ws://macman.test/ws' }),
+        getFreshChatConnection: vi.fn()
+      },
+      () => transport
+    )
+
+    const pending = client.connect()
+    await vi.waitFor(() => expect(transport.connect).toHaveBeenCalledOnce())
+    client.dispose()
+    finishConnect?.()
+    await pending
+
+    expect(transport.close).toHaveBeenCalledOnce()
+    expect(transport.request).not.toHaveBeenCalled()
+    expect(client.getSnapshot().status).toBe('connecting')
+  })
+
   it('fails visibly before opening a socket when the wrapper returns an invalid URL', async () => {
     const client = createMacManChatClient({
       getChatConnection: vi.fn().mockResolvedValue({ authMode: 'token', wsUrl: 'not-a-websocket' }),
