@@ -104,6 +104,12 @@ type PendingRequest = {
   timer: ReturnType<typeof setTimeout>
 }
 
+interface PendingDispatch {
+  clientMessageId: string
+  localMessageId: string
+  text: string
+}
+
 class MacManWebSocketTransport implements MacManChatTransport {
   private disconnectHandlers = new Set<(message: string) => void>()
   private eventHandlers = new Set<(event: MacManGatewayEvent) => void>()
@@ -462,6 +468,10 @@ class MacManChatGatewayClient implements MacManChatClient {
   private connectFlight?: Promise<void>
   private connectionGeneration = 0
   private listeners = new Set<(snapshot: MacManChatSnapshot) => void>()
+  private pendingDispatches = new Map<string, PendingDispatch>()
+  private reconnectAttempt = 0
+  private reconnectEnabled = false
+  private reconnectTimer?: ReturnType<typeof setTimeout>
   private runtimeSessionId?: string
   private state: MacManChatSnapshot = {
     activities: [],
@@ -502,6 +512,11 @@ class MacManChatGatewayClient implements MacManChatClient {
   }
 
   dispose(): void {
+    this.reconnectEnabled = false
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = undefined
+    }
     this.connectionGeneration += 1
     this.connectFlight = undefined
     const gateway = this.gateway
@@ -568,6 +583,8 @@ class MacManChatGatewayClient implements MacManChatClient {
     const wasBusy = this.state.busy
     const clientMessageId = `macman-${crypto.randomUUID()}`
     const localMessageId = `user-${clientMessageId}`
+    const pending = { clientMessageId, localMessageId, text: prompt }
+    this.pendingDispatches.set(clientMessageId, pending)
     this.publish({
       ...this.state,
       busy: true,
@@ -583,28 +600,45 @@ class MacManChatGatewayClient implements MacManChatClient {
       ]
     })
 
+    await this.dispatchPending(pending, wasBusy)
+  }
+
+  private async dispatchPending(pending: PendingDispatch, wasBusy = this.state.busy): Promise<void> {
+    const gateway = this.gateway
+    const runtimeSessionId = this.runtimeSessionId
+
+    if (!gateway || !runtimeSessionId || this.state.status !== 'ready') {
+      return
+    }
+
     try {
-      const receipt = await this.gateway.request<{
+      const receipt = await gateway.request<{
         client_message_id?: string
         dispatch_id?: string
         route?: MacManDispatchRoute
         state?: 'failed' | 'queued' | 'running'
         task_id?: string
       }>('prompt.dispatch', {
-        client_message_id: clientMessageId,
-        session_id: this.runtimeSessionId,
-        text: prompt
+        client_message_id: pending.clientMessageId,
+        session_id: runtimeSessionId,
+        text: pending.text
       })
+      this.pendingDispatches.delete(pending.clientMessageId)
       this.applyDispatchReceipt(receipt)
     } catch (error) {
+      if (this.gateway !== gateway) {
+        return
+      }
+
       const message = errorMessage(error)
+      this.pendingDispatches.delete(pending.clientMessageId)
       this.publish({
         ...this.state,
         busy: wasBusy,
         error: message,
         limitedModels: this.limitsAfterError(message),
         messages: this.state.messages.map(item =>
-          item.id === localMessageId
+          item.id === pending.localMessageId
             ? { ...item, dispatch: { ...item.dispatch!, route: 'routing', state: 'failed' } }
             : item
         )
@@ -694,6 +728,8 @@ class MacManChatGatewayClient implements MacManChatClient {
     if (!clientMessageId || !route || !state) {
       return
     }
+
+    this.pendingDispatches.delete(clientMessageId)
 
     this.publish({
       ...this.state,
@@ -873,6 +909,7 @@ class MacManChatGatewayClient implements MacManChatClient {
           this.gateway = undefined
           this.runtimeSessionId = undefined
           this.publish({ ...this.state, busy: false, error: message, status: 'error' })
+          this.scheduleReconnect()
         }
       })
       await gateway.connect(wsUrl)
@@ -913,13 +950,26 @@ class MacManChatGatewayClient implements MacManChatClient {
       }
 
       this.runtimeSessionId = session.session_id
+      this.reconnectAttempt = 0
+      this.reconnectEnabled = true
+      const hydratedMessages = hydrateLiveMessages(session)
+      const pendingMessages = [...this.pendingDispatches.values()].flatMap(pending =>
+        hydratedMessages.some(message => message.role === 'user' && message.text === pending.text)
+          ? []
+          : [{
+              dispatch: { clientMessageId: pending.clientMessageId, route: 'routing', state: 'routing' } as MacManDispatchReceipt,
+              id: pending.localMessageId,
+              role: 'user' as const,
+              text: pending.text
+            }]
+      )
       this.publish({
         activities: [],
         activeModel: modelSelection(session.info) ?? this.state.activeModel,
         busy: Boolean(session.running),
         error: undefined,
         limitedModels: this.state.limitedModels,
-        messages: hydrateLiveMessages(session),
+        messages: [...hydratedMessages, ...pendingMessages],
         pendingInput: session.pending_approval
           ? pendingInput('approval', session.pending_approval)
           : session.pending_clarify
@@ -927,6 +977,7 @@ class MacManChatGatewayClient implements MacManChatClient {
             : undefined,
         status: 'ready'
       })
+      this.pendingDispatches.forEach(pending => void this.dispatchPending(pending))
     } catch (error) {
       if (generation !== this.connectionGeneration) {
         return
@@ -935,7 +986,20 @@ class MacManChatGatewayClient implements MacManChatClient {
       this.gateway?.close()
       this.gateway = undefined
       this.publish({ ...this.state, busy: false, error: errorMessage(error), status: 'error' })
+      this.scheduleReconnect()
     }
+  }
+
+  private scheduleReconnect(): void {
+    if (!this.reconnectEnabled || this.reconnectTimer) {
+      return
+    }
+
+    const delay = Math.min(5_000, 250 * 2 ** this.reconnectAttempt++)
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined
+      void this.connect()
+    }, delay)
   }
 
   private publish(next: MacManChatSnapshot): void {
