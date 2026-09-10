@@ -153,7 +153,6 @@ export function MacManThinkingMark() {
     const startedAt = performance.now()
 
     image.decoding = 'async'
-    image.src = MARK_SRC
     image.onload = () => {
       if (disposed) return
 
@@ -180,6 +179,7 @@ export function MacManThinkingMark() {
         animationFrame = requestAnimationFrame(render)
       }
 
+      paintFrame(context, image, points, 0, color)
       setCanvasReady(true)
       start()
 
@@ -207,6 +207,7 @@ export function MacManThinkingMark() {
         document.removeEventListener('visibilitychange', handleDocumentVisibility)
       }
     }
+    image.src = MARK_SRC
 
     return () => {
       disposed = true
