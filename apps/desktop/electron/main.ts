@@ -239,6 +239,7 @@ import {
   resolveMacManConnectorExecutable,
   runMacManConnector
 } from './macman-connector-runtime'
+import { createMacManConnectionStore } from './macman-connection-store'
 import { createMacManConnectionsController } from './macman-connections-controller'
 import {
   applicationNameForDistribution,
@@ -1787,6 +1788,9 @@ const MACMAN_CONNECTOR_RESOURCES_ROOT = macManConnectorResourcesRoot(
   app.isPackaged
 )
 const MACMAN_CONNECTION_DATA_ROOT = path.join(app.getPath('userData'), 'connections')
+const macManConnectionStore = createMacManConnectionStore({
+  databasePath: path.join(MACMAN_CONNECTION_DATA_ROOT, 'connections.sqlite3')
+})
 
 const macManConnectionsController = createMacManConnectionsController({
   connectorExecutable(id) {
@@ -1802,6 +1806,12 @@ const macManConnectionsController = createMacManConnectionsController({
   },
   getIMessageDataDirectory() {
     return path.join(MACMAN_CONNECTION_DATA_ROOT, 'imessage')
+  },
+  getRememberedAccount(id) {
+    return macManConnectionStore.listAccounts(id)[0] ?? null
+  },
+  rememberAccount(account) {
+    macManConnectionStore.upsertAccount(account)
   },
   request: request => handleHermesApiRequest(request),
   runConnector(executable, args) {
@@ -17553,6 +17563,7 @@ app.on('before-quit', () => {
 // hold the event loop open or leak FDs past app teardown.
 app.on('will-quit', () => {
   destroyKeepaliveAgents()
+  macManConnectionStore.close()
 })
 
 // Answered synchronously so preload can publish the verdict before the

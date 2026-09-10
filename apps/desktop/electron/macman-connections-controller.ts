@@ -48,6 +48,8 @@ export interface MacManConnectionsDependencies {
   getGmailCredentialsPath(): null | string
   getGmailHome(): string
   getIMessageDataDirectory(): string
+  getRememberedAccount(id: MacManConnectionId): null | { displayName: string; externalId: string }
+  rememberAccount(account: { connector: MacManConnectionId; displayName: string; externalId: string }): void
   request(request: BackendRequest): Promise<unknown>
   runConnector(executable: string, args: string[]): Promise<ConnectorRunResult>
 }
@@ -192,36 +194,12 @@ export function createMacManConnectionsController(dependencies: MacManConnection
       return unavailable('imessage', 'iMessage')
     }
 
-    const result = await dependencies.runConnector(executable, [
-      '--data-dir',
-      dependencies.getIMessageDataDirectory(),
-      '--json',
-      '--no-events',
-      'state'
-    ])
+    const remembered = dependencies.getRememberedAccount('imessage')
 
-    if (result.exitCode !== 0) {
+    if (!remembered) {
       return {
         capabilities: [...CAPABILITIES.imessage],
-        detail: connectorFailure(result, 'iMessage permissions have not been checked.'),
-        id: 'imessage',
-        name: 'iMessage',
-        status: 'needs-permission'
-      }
-    }
-
-    const permissions = record(parseJson(result.stdout).permissions)
-    const missing = [
-      ['Accessibility', permissions.accessibility],
-      ['Contacts', permissions.contacts],
-      ['Messages Data', permissions.messagesData ?? permissions.messages_data],
-      ['Automation', permissions.automation]
-    ].filter(([, granted]) => granted !== true)
-
-    if (missing.length > 0) {
-      return {
-        capabilities: [...CAPABILITIES.imessage],
-        detail: `${missing.map(([name]) => name).join(', ')} permission${missing.length === 1 ? ' is' : 's are'} still required.`,
+        detail: 'Authorize the bundled Messages connector to read and send iMessages on this Mac.',
         id: 'imessage',
         name: 'iMessage',
         status: 'needs-permission'
@@ -229,8 +207,9 @@ export function createMacManConnectionsController(dependencies: MacManConnection
     }
 
     return {
+      account: remembered.displayName,
       capabilities: [...CAPABILITIES.imessage],
-      detail: 'Uses the Apple ID currently signed in to Messages on this Mac.',
+      detail: 'Authorized on this Mac. Reconnect if macOS access is later revoked.',
       id: 'imessage',
       name: 'iMessage',
       status: 'connected'
@@ -264,15 +243,27 @@ export function createMacManConnectionsController(dependencies: MacManConnection
 
     const accounts = gmailAccounts(parseJson(result.stdout))
 
-    return accounts.length > 0
-      ? {
+    if (accounts.length > 0) {
+      return {
           account: accounts[0],
           capabilities: [...CAPABILITIES.gmail],
           id: 'gmail',
           name: 'Gmail',
           status: 'connected'
         }
-      : {
+    }
+
+    if (!dependencies.getGmailCredentialsPath()) {
+      return {
+        capabilities: [...CAPABILITIES.gmail],
+        detail: 'Google sign-in is not enabled in this MacMan release.',
+        id: 'gmail',
+        name: 'Gmail',
+        status: 'unavailable'
+      }
+    }
+
+    return {
           capabilities: [...CAPABILITIES.gmail],
           detail: 'Sign in with Google to read, search, and send Gmail.',
           id: 'gmail',
@@ -304,6 +295,11 @@ export function createMacManConnectionsController(dependencies: MacManConnection
         'authorize'
       ])
       requireSuccessful(result, 'iMessage authorization failed')
+      dependencies.rememberAccount({
+        connector: 'imessage',
+        displayName: 'Messages on this Mac',
+        externalId: 'local-messages'
+      })
     },
 
     async cancelWhatsApp(pairingId: string): Promise<void> {

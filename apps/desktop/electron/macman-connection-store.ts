@@ -8,6 +8,12 @@ export type MacManMessageDirection = 'inbound' | 'outbound'
 export type MacManOutboxKind = 'email' | 'message'
 export type MacManOutboxStatus = 'failed' | 'pending' | 'sending' | 'sent'
 
+export interface MacManStoredAccount {
+  connector: MacManConnectorId
+  displayName: string
+  externalId: string
+}
+
 export interface MacManStoredMessage {
   accountExternalId: string
   connector: MacManConnectorId
@@ -238,6 +244,22 @@ export function createMacManConnectionStore({ databasePath, now = () => new Date
       .run(id, connector, externalId, displayName, timestamp, timestamp)
 
     return existing ?? id
+  }
+
+  function listAccounts(connector?: MacManConnectorId): MacManStoredAccount[] {
+    const rows = connector
+      ? (database
+          .prepare('SELECT connector, external_id, display_name FROM accounts WHERE connector = ? ORDER BY created_at, id')
+          .all(connector) as Array<Record<string, unknown>>)
+      : (database
+          .prepare('SELECT connector, external_id, display_name FROM accounts ORDER BY created_at, id')
+          .all() as Array<Record<string, unknown>>)
+
+    return rows.map(row => ({
+      connector: String(row.connector) as MacManConnectorId,
+      displayName: String(row.display_name),
+      externalId: String(row.external_id)
+    }))
   }
 
   function ensureAccount(connector: MacManConnectorId, externalId: string): string {
@@ -492,6 +514,7 @@ export function createMacManConnectionStore({ databasePath, now = () => new Date
     enqueueOutbox,
     getOutbox,
     ingestMessage,
+    listAccounts,
     listOutbox,
     markOutboxFailed,
     markOutboxSending,
