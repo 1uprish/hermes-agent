@@ -124,6 +124,57 @@ describe('MacMan chat session continuity', () => {
     })
   })
 
+  it('summarizes interim and todo events without exposing secrets or unbounded output', async () => {
+    let emit: ((event: { payload?: Record<string, unknown>; session_id?: string; type: string }) => void) | undefined
+    const transport: MacManChatTransport = {
+      close: vi.fn(),
+      connect: vi.fn().mockResolvedValue(undefined),
+      onEvent: vi.fn(handler => {
+        emit = handler
+
+        return () => undefined
+      }),
+      request: vi.fn(async (method: string) =>
+        method === 'session.list'
+          ? { sessions: [{ id: 'stored-chat', title: 'MacMan Chat' }] }
+          : { messages: [], session_id: 'runtime-chat' }
+      ) as MacManChatTransport['request']
+    }
+    const client = createMacManChatClient(
+      {
+        getChatConnection: vi.fn().mockResolvedValue({ authMode: 'token', wsUrl: 'ws://macman.test/ws' }),
+        getFreshChatConnection: vi.fn()
+      },
+      () => transport
+    )
+
+    await client.connect()
+    emit?.({
+      payload: { text: `Checking account with Authorization: Bearer secret-token ${'x'.repeat(600)}` },
+      session_id: 'runtime-chat',
+      type: 'message.interim'
+    })
+    emit?.({
+      payload: {
+        revision: 3,
+        todos: [
+          { content: 'Open Messages', id: '1', status: 'completed' },
+          { content: 'Send the note', id: '2', status: 'in_progress' }
+        ]
+      },
+      session_id: 'runtime-chat',
+      type: 'todo.updated'
+    })
+
+    const serialized = JSON.stringify(client.getSnapshot().activities)
+    expect(serialized).not.toContain('secret-token')
+    expect(serialized.length).toBeLessThan(700)
+    expect(client.getSnapshot().activities).toEqual([
+      expect.objectContaining({ id: 'interim-current', kind: 'status', state: 'running' }),
+      expect.objectContaining({ id: 'todo-3', kind: 'task', label: '1 of 2 steps complete', state: 'running' })
+    ])
+  })
+
   it('interrupts foreground work and answers a pending approval through the runtime session', async () => {
     let emit: ((event: { payload?: Record<string, unknown>; session_id?: string; type: string }) => void) | undefined
     const requests: Array<{ method: string; params?: Record<string, unknown> }> = []
