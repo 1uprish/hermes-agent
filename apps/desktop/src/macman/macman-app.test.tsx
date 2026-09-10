@@ -47,6 +47,43 @@ describe('standalone MacMan frontend', () => {
     expect(screen.getByText('Needs access')).toBeTruthy()
   })
 
+  it('routes every permission control to its explicit native owner', () => {
+    const onOpenSystemSettings = vi.fn()
+    const onRequestPermission = vi.fn()
+
+    render(
+      <MacManApp
+        onOpenSystemSettings={onOpenSystemSettings}
+        onRequestPermission={onRequestPermission}
+        snapshot={snapshot}
+      />
+    )
+
+    for (const name of [
+      'Grant Accessibility',
+      'Set up Microphone',
+      'Set up Notifications'
+    ]) {
+      fireEvent.click(screen.getByRole('button', { name }))
+    }
+
+    expect(onRequestPermission).toHaveBeenCalledWith('accessibility')
+    expect(onRequestPermission).toHaveBeenCalledWith('microphone')
+    expect(onRequestPermission).toHaveBeenCalledWith('notifications')
+
+    for (const [name, permission] of [
+      ['Open Calendar settings', 'calendar'],
+      ['Open Reminders settings', 'reminders'],
+      ['Open Contacts settings', 'contacts'],
+      ['Open App Automation settings', 'automation'],
+      ['Open Full Disk Access settings', 'fullDiskAccess'],
+      ['Open Location settings', 'location']
+    ] as const) {
+      fireEvent.click(screen.getByRole('button', { name }))
+      expect(onOpenSystemSettings).toHaveBeenCalledWith(permission)
+    }
+  })
+
   it('exposes the complete settings map without importing the Hermes settings UI', () => {
     render(<MacManApp initialView="general" snapshot={snapshot} />)
 
