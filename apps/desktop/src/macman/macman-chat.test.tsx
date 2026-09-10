@@ -23,7 +23,9 @@ function fakeClient(connectedSnapshot = readySnapshot) {
     connect: vi.fn(async () => listener?.(connectedSnapshot)),
     dispose: vi.fn(),
     getSnapshot: vi.fn(() => ({ busy: false, messages: [], status: 'connecting' as const })),
+    interrupt: vi.fn().mockResolvedValue(undefined),
     retry: vi.fn(),
+    respondToInput: vi.fn().mockResolvedValue(undefined),
     send: vi.fn().mockResolvedValue(undefined),
     switchModel: vi.fn().mockResolvedValue({ confirmRequired: false }),
     subscribe: vi.fn(next => {
@@ -113,6 +115,27 @@ describe('MacMan continuous chat', () => {
     expect(await screen.findByRole('region', { name: 'Live activity' })).toBeTruthy()
     expect(screen.getByText('Opening the signed-in browser')).toBeTruthy()
     expect(screen.getByText('Checking the page')).toBeTruthy()
+  })
+
+  it('offers a stop action and an inline approval decision while work is blocked', async () => {
+    const client = fakeClient({
+      ...readySnapshot,
+      busy: true,
+      pendingInput: {
+        choices: ['once', 'deny'],
+        description: 'Allow MacMan to control Messages',
+        kind: 'approval',
+        requestId: 'approval-1'
+      }
+    })
+
+    render(<MacManChat client={client} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Allow once' }))
+    await waitFor(() => expect(client.respondToInput).toHaveBeenCalledWith('once'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop current task' }))
+    await waitFor(() => expect(client.interrupt).toHaveBeenCalledOnce())
   })
 
   it('shows connected models in the composer and labels the model whose limit was exhausted', async () => {

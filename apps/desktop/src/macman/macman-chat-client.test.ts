@@ -124,6 +124,111 @@ describe('MacMan chat session continuity', () => {
     })
   })
 
+  it('interrupts foreground work and answers a pending approval through the runtime session', async () => {
+    let emit: ((event: { payload?: Record<string, unknown>; session_id?: string; type: string }) => void) | undefined
+    const requests: Array<{ method: string; params?: Record<string, unknown> }> = []
+    const transport: MacManChatTransport = {
+      close: vi.fn(),
+      connect: vi.fn().mockResolvedValue(undefined),
+      onEvent: vi.fn(handler => {
+        emit = handler
+
+        return () => undefined
+      }),
+      request: async <T>(method: string, params?: Record<string, unknown>) => {
+        requests.push({ method, params })
+
+        if (method === 'session.list') {
+          return { sessions: [{ id: 'stored-chat', title: 'MacMan Chat' }] } as T
+        }
+
+        if (method === 'session.resume') {
+          return { messages: [], running: true, session_id: 'runtime-chat' } as T
+        }
+
+        return { status: 'resolved' } as T
+      }
+    }
+    const client = createMacManChatClient(
+      {
+        getChatConnection: vi.fn().mockResolvedValue({ authMode: 'token', wsUrl: 'ws://macman.test/ws' }),
+        getFreshChatConnection: vi.fn()
+      },
+      () => transport
+    )
+
+    await client.connect()
+    emit?.({
+      payload: {
+        choices: ['once', 'deny'],
+        command: 'open -a Messages',
+        description: 'Allow MacMan to control Messages',
+        request_id: 'approval-1'
+      },
+      session_id: 'runtime-chat',
+      type: 'approval.request'
+    })
+
+    expect(client.getSnapshot().pendingInput).toMatchObject({
+      description: 'Allow MacMan to control Messages',
+      kind: 'approval',
+      requestId: 'approval-1'
+    })
+
+    await client.respondToInput('once')
+    await client.interrupt()
+
+    expect(requests.slice(-2)).toEqual([
+      {
+        method: 'approval.respond',
+        params: { choice: 'once', request_id: 'approval-1', session_id: 'runtime-chat' }
+      },
+      { method: 'session.interrupt', params: { session_id: 'runtime-chat' } }
+    ])
+    expect(client.getSnapshot().pendingInput).toBeUndefined()
+    expect(client.getSnapshot().busy).toBe(false)
+  })
+
+  it('restores pending clarification from session resume', async () => {
+    const transport: MacManChatTransport = {
+      close: vi.fn(),
+      connect: vi.fn().mockResolvedValue(undefined),
+      onEvent: vi.fn(() => () => undefined),
+      request: vi.fn(async (method: string) => {
+        if (method === 'session.list') {
+          return { sessions: [{ id: 'stored-chat', title: 'MacMan Chat' }] }
+        }
+
+        return {
+          messages: [],
+          pending_clarify: {
+            choices: ['Staging', 'Production'],
+            question: 'Which deployment target?',
+            request_id: 'clarify-1'
+          },
+          running: true,
+          session_id: 'runtime-chat'
+        }
+      }) as MacManChatTransport['request']
+    }
+    const client = createMacManChatClient(
+      {
+        getChatConnection: vi.fn().mockResolvedValue({ authMode: 'token', wsUrl: 'ws://macman.test/ws' }),
+        getFreshChatConnection: vi.fn()
+      },
+      () => transport
+    )
+
+    await client.connect()
+
+    expect(client.getSnapshot().pendingInput).toEqual({
+      choices: ['Staging', 'Production'],
+      description: 'Which deployment target?',
+      kind: 'clarify',
+      requestId: 'clarify-1'
+    })
+  })
+
   it('resumes the named durable chat and keeps later turns on its runtime session', async () => {
     const requests: Array<{ method: string; params?: Record<string, unknown> }> = []
     let disconnect: ((message: string) => void) | undefined
