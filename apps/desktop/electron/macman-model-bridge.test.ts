@@ -57,6 +57,13 @@ function fakeModelBackend() {
             models: ['openrouter/auto'],
             name: 'OpenRouter',
             slug: 'openrouter'
+          },
+          {
+            authenticated: false,
+            auth_type: 'aws_sdk',
+            models: [],
+            name: 'AWS Bedrock',
+            slug: 'bedrock'
           }
         ]
       }
@@ -129,10 +136,20 @@ test('MacMan builds its own provider catalog from the existing Hermes provider r
     catalog.providers.map(provider => [provider.id, provider.name, provider.setup]),
     [
       ['openai-codex', 'ChatGPT', 'oauth'],
+      ['bedrock', 'AWS Bedrock', 'external'],
       ['openrouter', 'OpenRouter', 'api-key'],
       ['qwen-oauth', 'Qwen', 'external']
     ]
   )
+})
+
+test('providers without inline credentials retain the existing Hermes model setup path', async () => {
+  const fake = fakeModelBackend()
+  const result = await fake.controller.openProviderSetup('bedrock')
+
+  assert.deepEqual(result, { copiedCommand: true, openedUrl: false })
+  assert.deepEqual(fake.copied, ['hermes model'])
+  assert.deepEqual(fake.terminals, ['opened'])
 })
 
 test('external provider setup copies its existing command and opens Terminal plus documentation', async () => {

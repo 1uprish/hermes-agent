@@ -153,6 +153,10 @@ function setupKind(option: ModelOptionRecord | undefined, oauth: OAuthProviderRe
     return 'external' as const
   }
 
+  if (option) {
+    return 'external' as const
+  }
+
   return 'unavailable' as const
 }
 
@@ -182,7 +186,7 @@ function mergeProviders(options: ModelOptionRecord[], oauthProviders: OAuthProvi
 
       return {
         authenticated: option?.authenticated === true || oauth?.loggedIn === true,
-        cliCommand: oauth?.cliCommand,
+        cliCommand: oauth?.cliCommand || (option && setupKind(option, oauth) === 'external' ? 'hermes model' : undefined),
         docsUrl: oauth?.docsUrl || option?.docsUrl,
         id,
         keyEnv: option?.keyEnv,
@@ -253,7 +257,7 @@ export function createMacManModelBridgeController(dependencies: MacManModelBridg
 
     async openProviderSetup(providerId: string) {
       const safeProviderId = assertId(providerId, 'provider')
-      const provider = (await oauthProviders()).find(candidate => candidate.id === safeProviderId)
+      const provider = (await catalog()).providers.find(candidate => candidate.id === safeProviderId)
 
       if (!provider) {
         throw new Error('Unknown provider')

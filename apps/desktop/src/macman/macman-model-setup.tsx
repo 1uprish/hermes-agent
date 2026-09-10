@@ -375,7 +375,7 @@ export function MacManModelSetup({ bridge, onClose, onConnected }: MacManModelSe
               <button
                 aria-label={providerAction(provider)}
                 className="mm-provider-row"
-                disabled={busy || provider.setup === 'unavailable'}
+                disabled={busy}
                 key={provider.id}
                 onClick={() => void chooseProvider(provider)}
                 type="button"
