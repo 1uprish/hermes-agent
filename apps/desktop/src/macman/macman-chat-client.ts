@@ -412,6 +412,7 @@ function todoActivity(payload: Record<string, unknown>): MacManActivity | undefi
   }
 
   const complete = todos.filter(todo => ['complete', 'completed', 'done'].includes(String(todo.status))).length
+
   const revision = typeof payload.revision === 'number' || typeof payload.revision === 'string'
     ? String(payload.revision)
     : 'current'
@@ -458,6 +459,7 @@ function hydrateLiveMessages(session: SessionStart): MacManChatMessage[] {
   }
 
   const queuedUser = session.queued?.user?.trim()
+
   if (queuedUser) {
     messages.push({
       dispatch: { route: 'queue', state: 'queued' },
@@ -548,10 +550,12 @@ class MacManChatGatewayClient implements MacManChatClient {
 
   dispose(): void {
     this.reconnectEnabled = false
+
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = undefined
     }
+
     this.connectionGeneration += 1
     this.connectFlight = undefined
     const gateway = this.gateway
@@ -593,12 +597,14 @@ class MacManChatGatewayClient implements MacManChatClient {
       ...(input.requestId ? { request_id: input.requestId } : {}),
       session_id: this.runtimeSessionId
     }
+
     const requests: Record<MacManPendingInput['kind'], { method: string; params: Record<string, unknown> }> = {
       approval: { method: 'approval.respond', params: { choice: response, ...common } },
       clarify: { method: 'clarify.respond', params: { answer: response, ...common } },
       secret: { method: 'secret.respond', params: { value: response, ...common } },
       sudo: { method: 'sudo.respond', params: { password: response, ...common } }
     }
+
     const request = requests[input.kind]
 
     await this.gateway.request(request.method, request.params)
@@ -658,6 +664,7 @@ class MacManChatGatewayClient implements MacManChatClient {
         session_id: runtimeSessionId,
         text: pending.text
       })
+
       this.pendingDispatches.delete(pending.clientMessageId)
       this.applyDispatchReceipt(receipt)
     } catch (error) {
@@ -788,6 +795,7 @@ class MacManChatGatewayClient implements MacManChatClient {
   private upsertActivity(activity: MacManActivity): void {
     const current = this.state.activities ?? []
     const found = current.some(item => item.id === activity.id)
+
     const next = found
       ? current.map(item => item.id === activity.id ? activity : item)
       : [...current, activity]
@@ -1000,6 +1008,7 @@ class MacManChatGatewayClient implements MacManChatClient {
       this.reconnectAttempt = 0
       this.reconnectEnabled = true
       const hydratedMessages = hydrateLiveMessages(session)
+
       const pendingMessages = [...this.pendingDispatches.values()].flatMap(pending =>
         hydratedMessages.some(message => message.role === 'user' && message.text === pending.text)
           ? []
@@ -1010,6 +1019,7 @@ class MacManChatGatewayClient implements MacManChatClient {
               text: pending.text
             }]
       )
+
       this.publish({
         activities: [],
         activeModel: modelSelection(session.info) ?? this.state.activeModel,
