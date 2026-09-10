@@ -3,9 +3,28 @@ import type { MacManChatConnection, MacManFreshChatConnection } from './native-c
 const MACMAN_CHAT_TITLE = 'MacMan Chat'
 
 export interface MacManChatMessage {
+  dispatch?: MacManDispatchReceipt
   id: string
   role: 'assistant' | 'user'
+  taskId?: string
   text: string
+}
+
+export type MacManDispatchRoute = 'foreground' | 'parallel' | 'queue' | 'redirect' | 'steer'
+
+export interface MacManDispatchReceipt {
+  clientMessageId?: string
+  dispatchId?: string
+  route: MacManDispatchRoute | 'routing'
+  state: 'failed' | 'queued' | 'routing' | 'running'
+  taskId?: string
+}
+
+export interface MacManActivity {
+  id: string
+  kind: 'status' | 'task' | 'tool'
+  label: string
+  state: 'complete' | 'failed' | 'running'
 }
 
 export interface MacManActiveModel {
@@ -28,6 +47,7 @@ export interface MacManModelSwitchResult {
 
 export interface MacManChatSnapshot {
   activeModel?: MacManActiveModel
+  activities?: MacManActivity[]
   busy: boolean
   error?: string
   limitedModels?: Record<string, MacManModelLimit>
@@ -256,8 +276,15 @@ interface SessionMessage {
 }
 
 interface SessionStart {
+  inflight?: {
+    assistant?: string
+    streaming?: boolean
+    user?: string
+  }
   info?: Record<string, unknown>
   messages?: SessionMessage[]
+  queued?: { user?: string }
+  running?: boolean
   session_id: string
   stored_session_id?: string
 }
@@ -304,6 +331,34 @@ function hydrateMessages(messages: SessionMessage[] = []): MacManChatMessage[] {
   })
 }
 
+function hydrateLiveMessages(session: SessionStart): MacManChatMessage[] {
+  const messages = hydrateMessages(session.messages)
+  const inflightUser = session.inflight?.user?.trim()
+  const inflightAssistant = session.inflight?.assistant?.trim()
+  const lastUser = [...messages].reverse().find(message => message.role === 'user')
+  const lastAssistant = [...messages].reverse().find(message => message.role === 'assistant')
+
+  if (inflightUser && lastUser?.text !== inflightUser) {
+    messages.push({ id: 'live-inflight-user', role: 'user', text: inflightUser })
+  }
+
+  if (inflightAssistant && lastAssistant?.text !== inflightAssistant) {
+    messages.push({ id: 'live-inflight-assistant', role: 'assistant', text: inflightAssistant })
+  }
+
+  const queuedUser = session.queued?.user?.trim()
+  if (queuedUser) {
+    messages.push({
+      dispatch: { route: 'queue', state: 'queued' },
+      id: 'live-queued-user',
+      role: 'user',
+      text: queuedUser
+    })
+  }
+
+  return messages
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -338,7 +393,13 @@ class MacManChatGatewayClient implements MacManChatClient {
   private connectionGeneration = 0
   private listeners = new Set<(snapshot: MacManChatSnapshot) => void>()
   private runtimeSessionId?: string
-  private state: MacManChatSnapshot = { busy: false, limitedModels: {}, messages: [], status: 'connecting' }
+  private state: MacManChatSnapshot = {
+    activities: [],
+    busy: false,
+    limitedModels: {},
+    messages: [],
+    status: 'connecting'
+  }
   private streamMessageId?: string
 
   constructor(
@@ -393,23 +454,54 @@ class MacManChatGatewayClient implements MacManChatClient {
   async send(text: string): Promise<void> {
     const prompt = text.trim()
 
-    if (!prompt || !this.gateway || !this.runtimeSessionId || this.state.status !== 'ready' || this.state.busy) {
+    if (!prompt || !this.gateway || !this.runtimeSessionId || this.state.status !== 'ready') {
       return
     }
 
-    this.streamMessageId = undefined
+    const wasBusy = this.state.busy
+    const clientMessageId = `macman-${crypto.randomUUID()}`
+    const localMessageId = `user-${clientMessageId}`
     this.publish({
       ...this.state,
       busy: true,
       error: undefined,
-      messages: [...this.state.messages, { id: `user-${crypto.randomUUID()}`, role: 'user', text: prompt }]
+      messages: [
+        ...this.state.messages,
+        {
+          dispatch: { clientMessageId, route: 'routing', state: 'routing' },
+          id: localMessageId,
+          role: 'user',
+          text: prompt
+        }
+      ]
     })
 
     try {
-      await this.gateway.request('prompt.submit', { session_id: this.runtimeSessionId, text: prompt })
+      const receipt = await this.gateway.request<{
+        client_message_id?: string
+        dispatch_id?: string
+        route?: MacManDispatchRoute
+        state?: 'failed' | 'queued' | 'running'
+        task_id?: string
+      }>('prompt.dispatch', {
+        client_message_id: clientMessageId,
+        session_id: this.runtimeSessionId,
+        text: prompt
+      })
+      this.applyDispatchReceipt(receipt)
     } catch (error) {
       const message = errorMessage(error)
-      this.publish({ ...this.state, busy: false, error: message, limitedModels: this.limitsAfterError(message) })
+      this.publish({
+        ...this.state,
+        busy: wasBusy,
+        error: message,
+        limitedModels: this.limitsAfterError(message),
+        messages: this.state.messages.map(item =>
+          item.id === localMessageId
+            ? { ...item, dispatch: { ...item.dispatch!, route: 'routing', state: 'failed' } }
+            : item
+        )
+      })
     }
   }
 
@@ -487,6 +579,44 @@ class MacManChatGatewayClient implements MacManChatClient {
     })
   }
 
+  private applyDispatchReceipt(payload: Record<string, unknown>): void {
+    const clientMessageId = typeof payload.client_message_id === 'string' ? payload.client_message_id : ''
+    const route = typeof payload.route === 'string' ? payload.route as MacManDispatchRoute : undefined
+    const state = typeof payload.state === 'string' ? payload.state as MacManDispatchReceipt['state'] : undefined
+
+    if (!clientMessageId || !route || !state) {
+      return
+    }
+
+    this.publish({
+      ...this.state,
+      messages: this.state.messages.map(message =>
+        message.dispatch?.clientMessageId === clientMessageId
+          ? {
+              ...message,
+              dispatch: {
+                clientMessageId,
+                dispatchId: typeof payload.dispatch_id === 'string' ? payload.dispatch_id : undefined,
+                route,
+                state,
+                taskId: typeof payload.task_id === 'string' ? payload.task_id : undefined
+              }
+            }
+          : message
+      )
+    })
+  }
+
+  private upsertActivity(activity: MacManActivity): void {
+    const current = this.state.activities ?? []
+    const found = current.some(item => item.id === activity.id)
+    const next = found
+      ? current.map(item => item.id === activity.id ? activity : item)
+      : [...current, activity]
+
+    this.publish({ ...this.state, activities: next.slice(-40) })
+  }
+
   private completeAssistant(payload: Record<string, unknown>): void {
     const finalText = textFromContent(payload.text) || textFromContent(payload.rendered)
 
@@ -520,7 +650,9 @@ class MacManChatGatewayClient implements MacManChatClient {
 
     const payload = event.payload ?? {}
 
-    if (event.type === 'message.start') {
+    if (event.type === 'dispatch.accepted') {
+      this.applyDispatchReceipt(payload)
+    } else if (event.type === 'message.start') {
       this.streamMessageId = undefined
       this.publish({ ...this.state, busy: true, error: undefined })
     } else if (event.type === 'message.delta') {
@@ -532,6 +664,49 @@ class MacManChatGatewayClient implements MacManChatClient {
 
       if (activeModel) {
         this.publish({ ...this.state, activeModel })
+      }
+    } else if (event.type === 'status.update') {
+      const label = textFromContent(payload.text)
+
+      if (label) {
+        this.upsertActivity({
+          id: `status-${textFromContent(payload.kind) || 'current'}`,
+          kind: 'status',
+          label,
+          state: 'running'
+        })
+      }
+    } else if (event.type === 'tool.start' || event.type === 'tool.progress' || event.type === 'tool.complete') {
+      const id = textFromContent(payload.tool_call_id) || textFromContent(payload.id) || `tool-${textFromContent(payload.name)}`
+      const label = textFromContent(payload.summary) || textFromContent(payload.context) || textFromContent(payload.preview) || textFromContent(payload.name)
+
+      if (id && label) {
+        this.upsertActivity({
+          id,
+          kind: 'tool',
+          label,
+          state: event.type === 'tool.complete' ? 'complete' : 'running'
+        })
+      }
+    } else if (event.type === 'background.complete') {
+      const taskId = textFromContent(payload.task_id)
+      const text = textFromContent(payload.text).trim()
+
+      if (text) {
+        const failed = /^error:/i.test(text)
+        this.upsertActivity({
+          id: taskId || `task-${crypto.randomUUID()}`,
+          kind: 'task',
+          label: failed ? text.replace(/^error:\s*/i, '') : 'Parallel task finished',
+          state: failed ? 'failed' : 'complete'
+        })
+        this.publish({
+          ...this.state,
+          messages: [
+            ...this.state.messages,
+            { id: `assistant-${crypto.randomUUID()}`, role: 'assistant', taskId: taskId || undefined, text }
+          ]
+        })
       }
     } else if (event.type === 'error') {
       const message = textFromContent(payload.message) || textFromContent(payload.error) || 'MacMan hit an unexpected error.'
@@ -618,11 +793,12 @@ class MacManChatGatewayClient implements MacManChatClient {
 
       this.runtimeSessionId = session.session_id
       this.publish({
+        activities: [],
         activeModel: modelSelection(session.info) ?? this.state.activeModel,
-        busy: false,
+        busy: Boolean(session.running),
         error: undefined,
         limitedModels: this.state.limitedModels,
-        messages: hydrateMessages(session.messages),
+        messages: hydrateLiveMessages(session),
         status: 'ready'
       })
     } catch (error) {

@@ -1246,6 +1246,67 @@ button:focus-visible {
   background: color-mix(in srgb, var(--mm-accent) 14%, var(--mm-card));
 }
 
+.mm-chat-route {
+  display: block;
+  margin-top: 6px;
+  color: var(--mm-text-secondary);
+  font-size: 9.5px;
+  text-align: right;
+}
+
+.mm-chat-route--failed {
+  color: var(--mm-red);
+}
+
+.mm-chat-activity {
+  width: min(520px, 88%);
+  margin: -4px 0 24px;
+  padding: 11px 13px;
+  border-radius: 11px;
+  background: var(--mm-fill);
+}
+
+.mm-chat-activity > strong {
+  color: var(--mm-text-secondary);
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mm-chat-activity ul {
+  display: grid;
+  margin: 8px 0 0;
+  padding: 0;
+  gap: 6px;
+  list-style: none;
+}
+
+.mm-chat-activity li {
+  display: flex;
+  color: var(--mm-text-secondary);
+  align-items: center;
+  gap: 8px;
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.mm-chat-activity li > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mm-accent);
+  flex: 0 0 auto;
+}
+
+.mm-chat-activity--complete > span {
+  background: var(--mm-green);
+}
+
+.mm-chat-activity--failed > span {
+  background: var(--mm-red);
+}
+
 .mm-chat-empty {
   display: flex;
   height: 100%;

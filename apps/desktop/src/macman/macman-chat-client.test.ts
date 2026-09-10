@@ -113,7 +113,8 @@ describe('MacMan chat session continuity', () => {
 
     expect(client.getSnapshot().activities).toEqual([
       expect.objectContaining({ id: 'tool-1', label: 'Opening the signed-in browser', state: 'running' }),
-      expect.objectContaining({ label: 'Checking the page', state: 'running' })
+      expect.objectContaining({ label: 'Checking the page', state: 'running' }),
+      expect.objectContaining({ id: 'bg-1', label: 'Parallel task finished', state: 'complete' })
     ])
     expect(JSON.stringify(client.getSnapshot())).not.toContain('do-not-render')
     expect(client.getSnapshot().messages.at(-1)).toMatchObject({
@@ -180,8 +181,12 @@ describe('MacMan chat session continuity', () => {
 
     await client.send('Next question')
     expect(requests.at(-1)).toEqual({
-      method: 'prompt.submit',
-      params: { session_id: 'runtime-chat', text: 'Next question' }
+      method: 'prompt.dispatch',
+      params: {
+        client_message_id: expect.stringMatching(/^macman-/),
+        session_id: 'runtime-chat',
+        text: 'Next question'
+      }
     })
 
     emit?.({ payload: {}, session_id: 'runtime-chat', type: 'message.start' })

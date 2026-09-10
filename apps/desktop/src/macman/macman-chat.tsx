@@ -13,6 +13,15 @@ interface MacManChatProps {
   onManageModels?: () => void
 }
 
+const DISPATCH_LABELS = {
+  foreground: 'Working on it',
+  parallel: 'Running in parallel',
+  queue: 'Queued next',
+  redirect: 'Updating current task',
+  routing: 'Choosing the best route',
+  steer: 'Added to current task'
+} as const
+
 export function MacManChat({ client, loadModelCatalog, onActiveModelChange, onManageModels }: MacManChatProps) {
   const [draft, setDraft] = useState('')
   const [snapshot, setSnapshot] = useState<MacManChatSnapshot>(() => client.getSnapshot())
@@ -51,7 +60,7 @@ export function MacManChat({ client, loadModelCatalog, onActiveModelChange, onMa
   const submit = () => {
     const message = draft.trim()
 
-    if (!message || snapshot.busy || snapshot.status !== 'ready') {
+    if (!message || snapshot.status !== 'ready') {
       return
     }
 
@@ -100,8 +109,26 @@ export function MacManChat({ client, loadModelCatalog, onActiveModelChange, onMa
               <article className={`mm-chat-message mm-chat-message--${message.role}`} key={message.id}>
                 <span>{message.role === 'user' ? 'You' : 'MacMan'}</span>
                 <p>{message.text}</p>
+                {message.dispatch ? (
+                  <small className={`mm-chat-route mm-chat-route--${message.dispatch.state}`}>
+                    {message.dispatch.state === 'failed' ? 'Could not route' : DISPATCH_LABELS[message.dispatch.route]}
+                  </small>
+                ) : null}
               </article>
             ))}
+            {snapshot.activities?.length ? (
+              <section aria-label="Live activity" className="mm-chat-activity">
+                <strong>Live activity</strong>
+                <ul>
+                  {snapshot.activities.slice(-4).map(activity => (
+                    <li className={`mm-chat-activity--${activity.state}`} key={activity.id}>
+                      <span aria-hidden />
+                      {activity.label}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
             {snapshot.busy ? <MacManThinkingMark /> : null}
           </div>
         )}
@@ -146,7 +173,7 @@ export function MacManChat({ client, loadModelCatalog, onActiveModelChange, onMa
             <button
               aria-label="Send message"
               className="mm-chat-send"
-              disabled={!draft.trim() || snapshot.busy || snapshot.status !== 'ready'}
+              disabled={!draft.trim() || snapshot.status !== 'ready'}
               onClick={submit}
               type="button"
             >
