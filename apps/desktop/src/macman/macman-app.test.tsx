@@ -171,4 +171,28 @@ describe('standalone MacMan frontend', () => {
 
     expect(screen.getByRole('heading', { name: 'General' })).toBeTruthy()
   })
+
+  it('gates the MacMan chat until setup is ready, then opens the chat instead of settings', () => {
+    const chat = <section><h1>MacMan chat</h1></section>
+    const { rerender } = render(<MacManApp chat={chat} snapshot={snapshot} />)
+
+    expect(screen.queryByRole('button', { name: "Let's go to MacMan" })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Finish required permissions' }).hasAttribute('disabled')).toBe(true)
+
+    rerender(
+      <MacManApp
+        chat={chat}
+        snapshot={{
+          ...snapshot,
+          model: 'connected',
+          permissions: { ...snapshot.permissions, accessibility: 'granted' }
+        }}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: "Let's go to MacMan" }))
+
+    expect(screen.getByRole('heading', { name: 'MacMan chat' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'General' })).toBeNull()
+  })
 })
