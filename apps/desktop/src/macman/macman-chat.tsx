@@ -2,6 +2,7 @@ import { IconArrowUp, IconRefresh } from '@tabler/icons-react'
 import { useEffect, useRef, useState } from 'react'
 
 import type { MacManChatClient, MacManChatSnapshot } from './macman-chat-client'
+import { MacManThinkingMark } from './macman-thinking-mark'
 
 interface MacManChatProps {
   client: MacManChatClient
@@ -90,13 +91,7 @@ export function MacManChat({ client }: MacManChatProps) {
                 <p>{message.text}</p>
               </article>
             ))}
-            {snapshot.busy ? (
-              <div className="mm-chat-thinking">
-                <span />
-                <span />
-                <span />
-              </div>
-            ) : null}
+            {snapshot.busy ? <MacManThinkingMark /> : null}
           </div>
         )}
       </div>
