@@ -78,6 +78,31 @@ test('message ingestion is durable and idempotent across connector retries', () 
   reopened.close()
 })
 
+test('connected account receipts survive an app restart without exposing connector secrets', () => {
+  const databasePath = temporaryDatabase()
+  const store = createMacManConnectionStore({ databasePath })
+
+  store.upsertAccount({ connector: 'imessage', displayName: 'Messages on this Mac', externalId: 'local-messages' })
+  assert.deepEqual(store.listAccounts('imessage'), [
+    {
+      connector: 'imessage',
+      displayName: 'Messages on this Mac',
+      externalId: 'local-messages'
+    }
+  ])
+  store.close()
+
+  const reopened = createMacManConnectionStore({ databasePath })
+  assert.deepEqual(reopened.listAccounts('imessage'), [
+    {
+      connector: 'imessage',
+      displayName: 'Messages on this Mac',
+      externalId: 'local-messages'
+    }
+  ])
+  reopened.close()
+})
+
 test('an idempotency key can enqueue exactly one outbound action', () => {
   const store = createMacManConnectionStore({ databasePath: temporaryDatabase() })
   const request = {

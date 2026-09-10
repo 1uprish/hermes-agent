@@ -12,9 +12,11 @@ function fakeDependencies(overrides: Record<string, unknown> = {}) {
     imessage: '/bundle/imessage-cli',
     whatsapp: '/bundle/bridge.js'
   }
+  const rememberedAccounts: Array<{ connector: string; displayName: string; externalId: string }> = []
 
   return {
     backendRequests,
+    rememberedAccounts,
     runs,
     dependencies: {
       connectorExecutable(id: string) {
@@ -28,6 +30,12 @@ function fakeDependencies(overrides: Record<string, unknown> = {}) {
       },
       getIMessageDataDirectory() {
         return '/user/macman/imessage'
+      },
+      getRememberedAccount(id: string) {
+        return rememberedAccounts.find(account => account.connector === id) ?? null
+      },
+      rememberAccount(account: { connector: string; displayName: string; externalId: string }) {
+        rememberedAccounts.push(account)
       },
       async request(request: { body?: unknown; method?: string; path: string }) {
         backendRequests.push(request)
@@ -69,14 +77,6 @@ function fakeDependencies(overrides: Record<string, unknown> = {}) {
           return { exitCode: 0, stderr: '', stdout: '{"accounts":[{"email":"arv@gmail.com"}]}' }
         }
 
-        if (executable.endsWith('/imessage-cli') && args.includes('state')) {
-          return {
-            exitCode: 0,
-            stderr: '',
-            stdout: '{"permissions":{"accessibility":true,"automation":false,"contacts":true,"messagesData":true}}'
-          }
-        }
-
         return { exitCode: 0, stderr: '', stdout: '{}' }
       },
       ...overrides
@@ -84,7 +84,7 @@ function fakeDependencies(overrides: Record<string, unknown> = {}) {
   }
 }
 
-test('catalog reports provider truth and never mistakes a bundled runtime for a connected account', async () => {
+test('catalog reports provider truth and never treats an unprobed iMessage runtime as connected', async () => {
   const fake = fakeDependencies()
   const controller = createMacManConnectionsController(fake.dependencies)
 
@@ -99,7 +99,7 @@ test('catalog reports provider truth and never mistakes a bundled runtime for a 
       },
       {
         capabilities: ['read', 'search', 'send', 'attachments', 'reactions'],
-        detail: 'Automation permission is still required.',
+        detail: 'Authorize the bundled Messages connector to read and send iMessages on this Mac.',
         id: 'imessage',
         name: 'iMessage',
         status: 'needs-permission'
@@ -112,6 +112,26 @@ test('catalog reports provider truth and never mistakes a bundled runtime for a 
         status: 'connected'
       }
     ]
+  })
+  assert.equal(fake.runs.some(run => run.executable.endsWith('/imessage-cli') && run.args.includes('state')), false)
+})
+
+test('successful iMessage authorization creates a durable connection receipt used by the catalog', async () => {
+  const fake = fakeDependencies()
+  const controller = createMacManConnectionsController(fake.dependencies)
+
+  await controller.authorizeIMessage()
+
+  assert.deepEqual(fake.rememberedAccounts, [
+    { connector: 'imessage', displayName: 'Messages on this Mac', externalId: 'local-messages' }
+  ])
+  assert.deepEqual((await controller.catalog()).connections[1], {
+    account: 'Messages on this Mac',
+    capabilities: ['read', 'search', 'send', 'attachments', 'reactions'],
+    detail: 'Authorized on this Mac. Reconnect if macOS access is later revoked.',
+    id: 'imessage',
+    name: 'iMessage',
+    status: 'connected'
   })
 })
 
@@ -180,6 +200,26 @@ test('Gmail setup fails before opening OAuth when the release has no client iden
 
   await assert.rejects(() => controller.connectGmail('arv@gmail.com'), /OAuth client.*release/i)
   assert.equal(fake.runs.filter(run => run.executable.endsWith('/gog') && run.args.includes('add')).length, 0)
+})
+
+test('Gmail is unavailable before sign-in when the release has no Google OAuth identity', async () => {
+  const fake = fakeDependencies({
+    getGmailCredentialsPath: () => null,
+    runConnector: async (executable: string, args: string[]) => {
+      fake.runs.push({ args, executable })
+      return { exitCode: 0, stderr: '', stdout: '{"accounts":[]}' }
+    }
+  })
+  const controller = createMacManConnectionsController(fake.dependencies)
+  const gmail = (await controller.catalog()).connections.find(connection => connection.id === 'gmail')
+
+  assert.deepEqual(gmail, {
+    capabilities: ['read', 'search', 'send', 'attachments'],
+    detail: 'Google sign-in is not enabled in this MacMan release.',
+    id: 'gmail',
+    name: 'Gmail',
+    status: 'unavailable'
+  })
 })
 
 test('iMessage setup invokes the bundled authorization UI from a user action', async () => {
