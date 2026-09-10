@@ -407,6 +407,72 @@ describe('MacMan chat session continuity', () => {
     expect(client.getSnapshot().status).toBe('ready')
   })
 
+  it('automatically reconnects and retries an unacknowledged dispatch with the same client id', async () => {
+    vi.useFakeTimers()
+    const requests: Array<{ client: number; method: string; params?: Record<string, unknown> }> = []
+    const disconnects: Array<((message: string) => void) | undefined> = []
+    const transports = [0, 1].map(client => ({
+      close: vi.fn(),
+      connect: vi.fn().mockResolvedValue(undefined),
+      onDisconnect: vi.fn((handler: (message: string) => void) => {
+        disconnects[client] = handler
+
+        return () => undefined
+      }),
+      onEvent: vi.fn(() => () => undefined),
+      request: vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        requests.push({ client, method, params })
+
+        if (method === 'session.list') {
+          return { sessions: [{ id: 'stored-chat', title: 'MacMan Chat' }] }
+        }
+
+        if (method === 'session.resume') {
+          return { messages: [], session_id: 'runtime-chat' }
+        }
+
+        if (client === 0 && method === 'prompt.dispatch') {
+          return new Promise(() => undefined)
+        }
+
+        return {
+          client_message_id: params?.client_message_id,
+          route: 'foreground',
+          state: 'running'
+        }
+      })
+    }))
+    let nextTransport = 0
+    const client = createMacManChatClient(
+      {
+        getChatConnection: vi.fn().mockResolvedValue({ authMode: 'token', wsUrl: 'ws://macman.test/ws' }),
+        getFreshChatConnection: vi.fn()
+      },
+      () => transports[nextTransport++] as MacManChatTransport
+    )
+
+    try {
+      await client.connect()
+      const firstSend = client.send('Do not lose this')
+      await vi.waitFor(() => expect(requests.filter(call => call.method === 'prompt.dispatch')).toHaveLength(1))
+      const originalId = requests.find(call => call.method === 'prompt.dispatch')?.params?.client_message_id
+
+      disconnects[0]?.('Connection dropped.')
+      await vi.advanceTimersByTimeAsync(500)
+      await vi.waitFor(() => expect(transports[1].connect).toHaveBeenCalledOnce())
+
+      const dispatches = requests.filter(call => call.method === 'prompt.dispatch')
+      expect(dispatches).toHaveLength(2)
+      expect(dispatches[1].params?.client_message_id).toBe(originalId)
+      expect(client.getSnapshot()).toMatchObject({ error: undefined, status: 'ready' })
+      expect(client.getSnapshot().messages.filter(message => message.text === 'Do not lose this')).toHaveLength(1)
+      void firstSend
+    } finally {
+      client.dispose()
+      vi.useRealTimers()
+    }
+  })
+
   it('does not finish a stale connection after the chat view is closed', async () => {
     let finishConnect: (() => void) | undefined
 
