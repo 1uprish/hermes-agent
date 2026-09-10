@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { ensureLocalMemory, type MacManMemoryApi } from './macman-memory'
+import { ensureLocalMemory, type MacManMemoryApi, saveMacManMemorySetting } from './macman-memory'
 import type { MacManModelCatalog } from './native-contract'
 
 const openAiCatalog: MacManModelCatalog = {
@@ -53,6 +53,7 @@ describe('MacMan local memory integration', () => {
       llm_provider: 'openai',
       mode: 'local_embedded'
     })
+
     expect(memoryApi.setupProvider).toHaveBeenCalledWith('hindsight', expected)
     expect(memoryApi.saveProviderConfig).toHaveBeenCalledWith('hindsight', expected)
     expect(result).toMatchObject({
@@ -65,6 +66,7 @@ describe('MacMan local memory integration', () => {
 
   it('never turns an OAuth-only ChatGPT connection into a cloud memory bill', async () => {
     const memoryApi = api()
+
     const catalog: MacManModelCatalog = {
       connected: true,
       current: { model: 'gpt-5.5', provider: 'openai-codex' },
@@ -95,5 +97,63 @@ describe('MacMan local memory integration', () => {
     expect(memoryApi.saveProviderConfig).not.toHaveBeenCalled()
     expect(result.status).toBe('basic')
     expect(result.detail).toContain('install failed')
+  })
+
+  it('reads an already-active local provider without reinstalling it', async () => {
+    const memoryApi = api({
+      getProviderConfig: vi.fn().mockResolvedValue({
+        docs_url: '',
+        fields: [
+          { key: 'mode', value: 'local_embedded' },
+          { key: 'auto_retain', value: false },
+          { key: 'auto_recall', value: true }
+        ],
+        label: 'Hindsight',
+        name: 'hindsight'
+      }),
+      getStatus: vi.fn().mockResolvedValue({
+        active: 'hindsight',
+        builtin_files: { memory: 12, user: 8 },
+        providers: []
+      })
+    })
+
+    const result = await ensureLocalMemory(openAiCatalog, memoryApi)
+
+    expect(memoryApi.setupProvider).not.toHaveBeenCalled()
+    expect(result).toMatchObject({
+      learnFromConversations: false,
+      status: 'ready',
+      useSavedMemories: true
+    })
+  })
+
+  it('turns off both provider activity and built-in prompt injection', async () => {
+    const memoryApi = api({
+      getStatus: vi.fn().mockResolvedValue({
+        active: 'hindsight',
+        builtin_files: { memory: 12, user: 8 },
+        providers: []
+      })
+    })
+
+    const result = await saveMacManMemorySetting(
+      {
+        enabled: true,
+        learnFromConversations: true,
+        status: 'ready',
+        useSavedMemories: true
+      },
+      'enabled',
+      false,
+      memoryApi
+    )
+
+    expect(memoryApi.saveProviderConfig).toHaveBeenCalledWith('hindsight', {
+      auto_recall: false,
+      auto_retain: false
+    })
+    expect(memoryApi.saveConfig).toHaveBeenLastCalledWith({ memory: { provider: '' } })
+    expect(result.status).toBe('disabled')
   })
 })

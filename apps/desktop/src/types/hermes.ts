@@ -170,6 +170,20 @@ export interface MemoryProviderConfig {
   name: string
 }
 
+export interface MemoryProviderSetupResponse {
+  ok: boolean
+  provider: string
+  results: Array<{
+    command: string
+    kind: string
+    name: string
+    returncode: number | null
+    status: string
+    stderr: string
+    stdout: string
+  }>
+}
+
 export interface CustomEndpoint {
   api_key_preview?: null | string
   base_url: string
@@ -1628,7 +1642,13 @@ export interface McpCatalogResponse {
 /** `GET /api/memory` — active provider + built-in memory file sizes. */
 export interface MemoryStatusResponse {
   active: string
-  providers: { name: string; description: string; configured: boolean }[]
+  providers: Array<{
+    available?: boolean
+    configured: boolean
+    description: string
+    name: string
+    status?: string
+  }>
   builtin_files: { memory: number; user: number }
 }
 

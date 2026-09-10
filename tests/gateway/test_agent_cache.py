@@ -147,6 +147,19 @@ class TestExtractCacheBustingConfig:
     """Verify _extract_cache_busting_config pulls the documented subset of
     config values that must invalidate the cached agent on change."""
 
+    def test_memory_provider_revision_participates_in_the_agent_signature(self):
+        from gateway.run import GatewayRunner
+
+        before = GatewayRunner._extract_cache_busting_config(
+            {"memory": {"provider": "hindsight", "config_revision": 1}}
+        )
+        after = GatewayRunner._extract_cache_busting_config(
+            {"memory": {"provider": "hindsight", "config_revision": 2}}
+        )
+
+        assert before["memory.provider"] == after["memory.provider"] == "hindsight"
+        assert before["memory.config_revision"] != after["memory.config_revision"]
+
 
     def test_reads_compression_subkeys(self):
         from gateway.run import GatewayRunner

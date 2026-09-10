@@ -867,7 +867,7 @@ class TestWebServerEndpoints:
 
     def test_declared_surface_put_writes_config_and_secret(self):
         from hermes_constants import get_hermes_home
-        from hermes_cli.config import load_env
+        from hermes_cli.config import load_config, load_env
 
         resp = self.client.put(
             "/api/memory/providers/hindsight/config?surface=declared",
@@ -889,6 +889,7 @@ class TestWebServerEndpoints:
         assert provider_config["mode"] == "local_external"
         assert provider_config["api_url"] == "http://localhost:8888"
         assert "api_key" not in provider_config
+        assert load_config()["memory"]["config_revision"] >= 1
 
 
 

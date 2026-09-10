@@ -7,6 +7,7 @@ import contextlib
 import importlib
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -111,7 +112,15 @@ def _embedded_profile_env_path(config: dict[str, Any]) -> Path:
 
 
 def _embedded_llm_api_key(config: dict[str, Any]) -> str:
-    return config.get("llmApiKey") or config.get("llm_api_key") or get_secret("HINDSIGHT_LLM_API_KEY", "")
+    direct = config.get("llmApiKey") or config.get("llm_api_key")
+    if direct:
+        return str(direct)
+    key_env = str(config.get("llm_key_env") or "").strip()
+    if key_env:
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,127}", key_env):
+            raise ValueError("llm_key_env must be an uppercase environment key name")
+        return get_secret(key_env, "")
+    return get_secret("HINDSIGHT_LLM_API_KEY", "")
 
 
 def _build_embedded_profile_env(config: dict[str, Any], *, llm_api_key: str | None = None) -> dict[str, str]:

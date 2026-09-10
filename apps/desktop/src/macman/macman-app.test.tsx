@@ -117,6 +117,7 @@ describe('standalone MacMan frontend', () => {
     )
 
     const settingsNavigation = screen.getByText('Settings').parentElement
+
     const labels = Array.from(settingsNavigation?.querySelectorAll('.mm-nav-item') ?? []).map(item =>
       item.textContent?.trim()
     )

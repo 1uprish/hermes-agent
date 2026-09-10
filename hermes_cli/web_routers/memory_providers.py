@@ -300,14 +300,23 @@ def _memory_section(config: Dict[str, Any]) -> Dict[str, Any]:
     return memory_config
 
 
+def _bump_memory_provider_config_revision(memory_config: Dict[str, Any]) -> None:
+    raw = memory_config.get("config_revision", 0)
+    try:
+        current = 0 if isinstance(raw, bool) else max(0, int(raw))
+    except (TypeError, ValueError):
+        current = 0
+    memory_config["config_revision"] = current + 1
+
+
 def _update_memory_provider_config(provider: ProviderConfigSchema, values: Dict[str, str]) -> None:
     writer = _write_provider_honcho if provider.storage == STORAGE_HONCHO_HOST_BLOCK else _write_provider_flat
     writer(provider, values)
     config = load_config()
     memory_config = _memory_section(config)
-    if memory_config.get("provider") != provider.name:
-        memory_config["provider"] = provider.name
-        save_config(config)
+    memory_config["provider"] = provider.name
+    _bump_memory_provider_config_revision(memory_config)
+    save_config(config)
 
 
 # ── Setup: dependency installation ────────────────────────────────────────────
@@ -390,12 +399,12 @@ def _install_memory_provider_external_dependencies(dependencies: List[Dict[str, 
     return results
 
 
-def _install_memory_provider_setup(name: str) -> Dict[str, Any]:
+def _install_memory_provider_setup(name: str, values: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     provider = _load_memory_provider(name)
     manifest = _memory_provider_manifest(name)
     if provider is None and not manifest:
         raise _unknown_provider(name)
-    setup = _memory_provider_setup_manifest(name)
+    setup = _memory_provider_setup_manifest(name, values)
     results = _install_memory_provider_pip_dependencies(setup["pip_dependencies"])
     results.extend(_install_memory_provider_external_dependencies(setup["external_dependencies"]))
     if not results:
@@ -543,7 +552,7 @@ async def setup_memory_provider(name: str, body: MemoryProviderSetupRequest):
         with _value_errors_as_http("Failed to persist memory provider setup values for %s", name, passthrough_http=False):
             _write_memory_provider_config_values(name, provider, body.values)
     _invalidate_plugins_hub_cache()
-    return _install_memory_provider_setup(name)
+    return _install_memory_provider_setup(name, body.values)
 
 
 @router.put("/api/memory/providers/{name}/config")
@@ -567,7 +576,9 @@ async def update_memory_provider_config(
         _write_memory_provider_config_values(name, provider, values)
         _require_memory_provider_ready(name)
         config = load_config()
-        _memory_section(config)["provider"] = name
+        memory_config = _memory_section(config)
+        memory_config["provider"] = name
+        _bump_memory_provider_config_revision(memory_config)
         save_config(config)
         _invalidate_plugins_hub_cache()
         return {"ok": True, "active": name}

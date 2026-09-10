@@ -74,6 +74,7 @@ export type {
   McpServerTestResponse,
   MemoryProviderConfig,
   MemoryProviderOAuthStatus,
+  MemoryProviderSetupResponse,
   MemoryStatusResponse,
   MessagingEnvVarInfo,
   MessagingHomeChannel,

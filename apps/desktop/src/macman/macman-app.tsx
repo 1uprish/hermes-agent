@@ -2,6 +2,7 @@ import {
   IconAccessible,
   IconAdjustments,
   IconBell,
+  IconBrain,
   IconCalendar,
   IconCheck,
   IconChevronRight,
@@ -24,6 +25,11 @@ import {
 } from '@tabler/icons-react'
 import { type ComponentType, type ReactNode, useEffect, useMemo, useState } from 'react'
 
+import {
+  DEFAULT_MACMAN_MEMORY_SETTINGS,
+  type MacManMemorySetting,
+  type MacManMemorySettings
+} from './macman-memory'
 import type { MacManPermissionId, MacManPermissionStatus, MacManSnapshot } from './native-contract'
 
 export type { MacManPermissionId, MacManPermissionStatus, MacManSnapshot } from './native-contract'
@@ -36,6 +42,7 @@ export type MacManView =
   | 'voice'
   | 'notifications'
   | 'connections'
+  | 'memory'
   | 'privacy'
   | 'advanced'
 
@@ -66,10 +73,12 @@ export type MacManAppProps = {
   onComplete?: () => void
   onOpenModelSetup?: () => void
   onOpenSystemSettings?: (permission: MacManPermissionId) => void
+  onMemorySettingChange?: (setting: MacManMemorySetting, value: boolean) => void
   onRequestPermission?: (permission: MacManPermissionId) => void
   onRefresh?: () => void
   onSettingsAction?: (action: MacManSettingsAction) => void
   settingsNotice?: string
+  memorySettings?: MacManMemorySettings
   snapshot?: MacManSnapshot
 }
 
@@ -178,6 +187,7 @@ const NAV_GROUPS: Array<{ label?: string; items: Array<{ icon: IconType; id: Mac
       { id: 'voice', label: 'Voice & Audio', icon: IconMicrophone },
       { id: 'notifications', label: 'Notifications', icon: IconBell },
       { id: 'connections', label: 'Connections', icon: IconPlugConnected },
+      { id: 'memory', label: 'Memory', icon: IconBrain },
       { id: 'privacy', label: 'Privacy & Safety', icon: IconLock },
       { id: 'advanced', label: 'Advanced', icon: IconAdjustments }
     ]
@@ -524,6 +534,32 @@ function Toggle({ defaultChecked = false, label }: { defaultChecked?: boolean; l
   )
 }
 
+function ControlledToggle({
+  checked,
+  disabled = false,
+  label,
+  onChange
+}: {
+  checked: boolean
+  disabled?: boolean
+  label: string
+  onChange(value: boolean): void
+}) {
+  return (
+    <button
+      aria-checked={checked}
+      aria-label={label}
+      className={`mm-switch ${checked ? 'is-on' : ''}`}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      role="switch"
+      type="button"
+    >
+      <span />
+    </button>
+  )
+}
+
 function SettingRow({ action, description, title }: { action: ReactNode; description: string; title: string }) {
   return (
     <div className="mm-setting-row">
@@ -537,12 +573,16 @@ function SettingRow({ action, description, title }: { action: ReactNode; descrip
 }
 
 function SettingsPage({
+  memorySettings,
   notice,
+  onMemorySettingChange,
   onSettingsAction,
   view,
   wrapperStatus
 }: {
+  memorySettings: MacManMemorySettings
   notice?: string
+  onMemorySettingChange?: (setting: MacManMemorySetting, value: boolean) => void
   onSettingsAction?: (action: MacManSettingsAction) => void
   view: Exclude<MacManView, 'chat' | 'setup' | 'permissions'>
   wrapperStatus: NonNullable<MacManSnapshot['wrapper']>
@@ -613,6 +653,66 @@ function SettingsPage({
           <ConnectionRow description="Use your signed-in browser for approved tasks." name="Browser" status="Available in chat" />
           <ConnectionRow description="Connect an email account when the MacMan chat surface is enabled." name="Email" status="Available in chat" />
           <ConnectionRow description="Add supported tools from the MacMan chat surface." name="More connections" status="Available in chat" />
+        </SettingsGroup>
+      </SettingsScaffold>
+    )
+  }
+
+  if (view === 'memory') {
+    const busy = memorySettings.status === 'loading' || memorySettings.status === 'setting-up'
+    const enhanced = memorySettings.status === 'ready'
+
+    const statusLabel =
+      memorySettings.status === 'disabled' ? 'Memory off' : busy ? 'Setting up local memory' : 'Stored on this Mac'
+
+    return (
+      <SettingsScaffold
+        description="Choose what MacMan remembers between conversations. Saved memory is stored on this Mac; your selected model processes conversations as usual."
+        notice={notice}
+        title="Memory"
+      >
+        <SettingsGroup title="Long-term memory">
+          <SettingRow
+            action={<span className={`mm-inline-ready ${memorySettings.status === 'disabled' ? 'is-offline' : ''}`}><span />{statusLabel}</span>}
+            description={memorySettings.detail ?? 'MacMan keeps durable context locally and brings back only what is relevant.'}
+            title="Memory status"
+          />
+          <SettingRow
+            action={
+              <ControlledToggle
+                checked={memorySettings.enabled}
+                disabled={busy}
+                label="Memory"
+                onChange={value => onMemorySettingChange?.('enabled', value)}
+              />
+            }
+            description="Remember useful details between conversations."
+            title="Memory"
+          />
+          <SettingRow
+            action={
+              <ControlledToggle
+                checked={memorySettings.learnFromConversations}
+                disabled={busy || !memorySettings.enabled || !enhanced}
+                label="Learn from conversations"
+                onChange={value => onMemorySettingChange?.('learnFromConversations', value)}
+              />
+            }
+            description="Save useful details, preferences, and relationships from new conversations."
+            title="Learn from conversations"
+          />
+          <SettingRow
+            action={
+              <ControlledToggle
+                checked={memorySettings.useSavedMemories}
+                disabled={busy || !memorySettings.enabled || !enhanced}
+                label="Use saved memories"
+                onChange={value => onMemorySettingChange?.('useSavedMemories', value)}
+              />
+            }
+            description="Use what MacMan remembers when answering."
+            title="Use saved memories"
+          />
         </SettingsGroup>
       </SettingsScaffold>
     )
@@ -759,7 +859,9 @@ function ConnectionRow({
 export function MacManApp({
   chat,
   initialView = 'setup',
+  memorySettings = DEFAULT_MACMAN_MEMORY_SETTINGS,
   onComplete,
+  onMemorySettingChange,
   onOpenModelSetup,
   onOpenSystemSettings,
   onRequestPermission,
@@ -864,7 +966,9 @@ export function MacManApp({
           />
         ) : (
           <SettingsPage
+            memorySettings={memorySettings}
             notice={settingsNotice}
+            onMemorySettingChange={onMemorySettingChange}
             onSettingsAction={onSettingsAction}
             view={activeView}
             wrapperStatus={wrapperStatus}

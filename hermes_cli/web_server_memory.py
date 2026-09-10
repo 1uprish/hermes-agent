@@ -62,8 +62,17 @@ def _string_list(value: Any) -> List[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
-def _memory_provider_setup_manifest(name: str) -> Dict[str, Any]:
+def _memory_provider_setup_manifest(name: str, values: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     manifest = _memory_provider_manifest(name)
+    selected = values or {}
+    variants = manifest.get("setup_variants")
+    if isinstance(variants, dict):
+        for field, raw_choices in variants.items():
+            if not isinstance(raw_choices, dict):
+                continue
+            choice = raw_choices.get(str(selected.get(field, "")).strip())
+            if isinstance(choice, dict):
+                manifest = {**manifest, **choice}
     external_dependencies: List[Dict[str, str]] = []
     for raw in manifest.get("external_dependencies") or []:
         if not isinstance(raw, dict):
@@ -79,7 +88,7 @@ def _memory_provider_setup_manifest(name: str) -> Dict[str, Any]:
 
 
 def _memory_provider_setup_info(name: str) -> Dict[str, Any]:
-    setup = _memory_provider_setup_manifest(name)
+    setup = _memory_provider_setup_manifest(name, _read_memory_provider_existing_values(name))
     setup["dependencies_installed"] = _memory_provider_dependencies_installed(setup)
     return setup
 

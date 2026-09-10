@@ -10,6 +10,7 @@ import type {
   ElevenLabsVoicesResponse,
   MemoryProviderConfig,
   MemoryProviderOAuthStatus,
+  MemoryProviderSetupResponse,
   MemoryStatusResponse
 } from '@/types/hermes'
 
@@ -62,6 +63,43 @@ export function saveMemoryProviderConfig(
   return hermesApi<{ ok: boolean }>({
     ...profileScoped(profile),
     path: `/api/memory/providers/${encodeURIComponent(provider)}/config?surface=declared`,
+    method: 'PUT',
+    body: { values }
+  })
+}
+
+export function getMemoryProviderRuntimeConfig(
+  provider: string,
+  profile?: null | string
+): Promise<MemoryProviderConfig> {
+  return hermesApi<MemoryProviderConfig>({
+    ...profileScoped(profile),
+    path: `/api/memory/providers/${encodeURIComponent(provider)}/config`
+  })
+}
+
+export function setupMemoryProvider(
+  provider: string,
+  values: Record<string, unknown>,
+  profile?: null | string
+): Promise<MemoryProviderSetupResponse> {
+  return hermesApi<MemoryProviderSetupResponse>({
+    ...profileScoped(profile),
+    path: `/api/memory/providers/${encodeURIComponent(provider)}/setup`,
+    method: 'POST',
+    body: { values },
+    timeoutMs: 300_000
+  })
+}
+
+export function saveMemoryProviderRuntimeConfig(
+  provider: string,
+  values: Record<string, unknown>,
+  profile?: null | string
+): Promise<{ active: string; ok: boolean }> {
+  return hermesApi<{ active: string; ok: boolean }>({
+    ...profileScoped(profile),
+    path: `/api/memory/providers/${encodeURIComponent(provider)}/config`,
     method: 'PUT',
     body: { values }
   })

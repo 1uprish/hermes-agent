@@ -3,8 +3,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { DEFAULT_MACMAN_SNAPSHOT, MacManApp, type MacManSettingsAction } from './macman-app'
 import { MacManChat } from './macman-chat'
 import { createMacManChatClient } from './macman-chat-client'
+import {
+  DEFAULT_MACMAN_MEMORY_SETTINGS,
+  ensureLocalMemory,
+  type MacManMemorySetting,
+  saveMacManMemorySetting
+} from './macman-memory'
 import { MacManModelSetup } from './macman-model-setup'
-import type { MacManNativeBridge, MacManPermissionId, MacManSnapshot } from './native-contract'
+import type { MacManModelCatalog, MacManNativeBridge, MacManPermissionId, MacManSnapshot } from './native-contract'
 
 type MacManRootProps = {
   bridge?: MacManNativeBridge | null
@@ -27,7 +33,45 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
   const requestGeneration = useRef(0)
   const [chatClient] = useState(() => createMacManChatClient(bridge ?? undefined))
   const [modelSetupOpen, setModelSetupOpen] = useState(false)
+  const [memorySettings, setMemorySettings] = useState(DEFAULT_MACMAN_MEMORY_SETTINGS)
   const [settingsNotice, setSettingsNotice] = useState<string>()
+  const latestModelCatalog = useRef<MacManModelCatalog | undefined>(undefined)
+  const memorySetupGeneration = useRef(0)
+  const memorySetupQueue = useRef<Promise<void>>(Promise.resolve())
+  const memorySetupSignature = useRef<string | undefined>(undefined)
+
+  const configureMemory = useCallback((catalog: MacManModelCatalog, force = false) => {
+    const signature = `${catalog.current?.provider ?? ''}:${catalog.current?.model ?? ''}`
+
+    if (!force && memorySetupSignature.current === signature) {
+      return
+    }
+
+    memorySetupSignature.current = signature
+    const generation = ++memorySetupGeneration.current
+    setMemorySettings(current => ({ ...current, status: 'setting-up' }))
+    memorySetupQueue.current = memorySetupQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          const next = await ensureLocalMemory(catalog)
+
+          if (generation === memorySetupGeneration.current) {
+            setMemorySettings(next)
+          }
+        } catch (error) {
+          if (generation === memorySetupGeneration.current) {
+            setMemorySettings({
+              enabled: true,
+              learnFromConversations: true,
+              status: 'basic',
+              useSavedMemories: true,
+              detail: `Using basic local memory because enhanced setup could not be checked: ${error instanceof Error ? error.message : String(error)}`
+            })
+          }
+        }
+      })
+  }, [])
 
   const commitLatest = useCallback(async (operation: () => Promise<MacManSnapshot>) => {
     const generation = ++requestGeneration.current
@@ -93,6 +137,8 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
     void bridge
       .getModelCatalog()
       .then(catalog => {
+        latestModelCatalog.current = catalog
+        configureMemory(catalog)
         const currentProvider = catalog.providers.find(provider => provider.id === catalog.current?.provider)
 
         setSnapshot(current => ({
@@ -103,7 +149,32 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
         }))
       })
       .catch(() => undefined)
-  }, [bridge])
+  }, [bridge, configureMemory])
+
+  const changeMemorySetting = useCallback(
+    (setting: MacManMemorySetting, value: boolean) => {
+      const previous = memorySettings
+      setMemorySettings(current => ({ ...current, [setting]: value }))
+      setSettingsNotice(undefined)
+
+      void saveMacManMemorySetting(previous, setting, value)
+        .then(next => {
+          setMemorySettings(next)
+
+          if (setting === 'enabled' && value && latestModelCatalog.current) {
+            memorySetupSignature.current = undefined
+            configureMemory(latestModelCatalog.current, true)
+          } else {
+            setSettingsNotice('Memory changes apply to new conversations.')
+          }
+        })
+        .catch(error => {
+          setMemorySettings(previous)
+          setSettingsNotice(error instanceof Error ? error.message : String(error))
+        })
+    },
+    [configureMemory, memorySettings]
+  )
 
   const loadModelCatalog = useCallback(() => {
     if (!bridge) {
@@ -254,6 +325,8 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
             onManageModels={() => setModelSetupOpen(true)}
           />
         }
+        memorySettings={memorySettings}
+        onMemorySettingChange={changeMemorySetting}
         onOpenModelSetup={() => setModelSetupOpen(true)}
         onOpenSystemSettings={openSystemSettings}
         onRefresh={refresh}
