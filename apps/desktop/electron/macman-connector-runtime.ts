@@ -12,6 +12,10 @@ const CONNECTOR_PATHS: Record<MacManConnectionId, (arch: string) => string[]> = 
   whatsapp: () => ['whatsapp', 'universal', 'bridge.js']
 }
 
+export function macManConnectorResourcesRoot(appPath: string, resourcesPath: string, isPackaged: boolean): string {
+  return isPackaged ? resourcesPath : join(appPath, 'build')
+}
+
 export function resolveMacManConnectorExecutable(
   resourcesPath: string,
   connector: MacManConnectionId,

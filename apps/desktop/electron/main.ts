@@ -234,7 +234,11 @@ import { buildHudWindowUrl } from './hud-url'
 import { resolveHudWindowing } from './hud-windowing'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
 import type { MacManCuaPermissionService } from './macman-cua-runtime'
-import { resolveMacManConnectorExecutable, runMacManConnector } from './macman-connector-runtime'
+import {
+  macManConnectorResourcesRoot,
+  resolveMacManConnectorExecutable,
+  runMacManConnector
+} from './macman-connector-runtime'
 import { createMacManConnectionsController } from './macman-connections-controller'
 import {
   applicationNameForDistribution,
@@ -1777,7 +1781,11 @@ const macManModelBridgeController = createMacManModelBridgeController({
   request: request => handleHermesApiRequest(request)
 })
 
-const MACMAN_CONNECTOR_RESOURCES_ROOT = app.isPackaged ? process.resourcesPath : app.getAppPath()
+const MACMAN_CONNECTOR_RESOURCES_ROOT = macManConnectorResourcesRoot(
+  app.getAppPath(),
+  process.resourcesPath,
+  app.isPackaged
+)
 const MACMAN_CONNECTION_DATA_ROOT = path.join(app.getPath('userData'), 'connections')
 
 const macManConnectionsController = createMacManConnectionsController({
