@@ -123,6 +123,35 @@ def test_later_use_reuses_verified_install_without_downloading(
     assert second_progress.getvalue() == ""
 
 
+def test_cache_hit_publishes_and_repairs_stable_imsg_command(
+    imsg_module: ModuleType, tmp_path: Path
+) -> None:
+    archive = _archive_bytes(tmp_path)
+    calls: list[str] = []
+    capability_root = tmp_path / "capabilities"
+    kwargs = {
+        "release": _release(imsg_module, archive),
+        "downloader": _write_downloader(archive, calls),
+        "signature_checker": _verify_fixture_signature,
+        "version_reader": _fixture_version,
+        "stderr": io.StringIO(),
+    }
+
+    binary = imsg_module.ensure_imsg(capability_root, **kwargs)
+    command = tmp_path / "bin" / "imsg"
+
+    assert command.is_symlink()
+    assert command.resolve() == binary.resolve()
+
+    command.unlink()
+    reused = imsg_module.ensure_imsg(capability_root, **kwargs)
+
+    assert reused == binary
+    assert command.is_symlink()
+    assert command.resolve() == binary.resolve()
+    assert calls == ["https://example.invalid/imsg.zip"]
+
+
 def test_concurrent_first_use_downloads_only_once(
     imsg_module: ModuleType, tmp_path: Path
 ) -> None:
