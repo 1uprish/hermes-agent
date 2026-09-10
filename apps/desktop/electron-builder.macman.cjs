@@ -46,12 +46,17 @@ module.exports = {
       from: 'dist/node_modules/@trycua/cua-driver-darwin-x64',
       to: 'macman-cua-sdk/node_modules/@trycua/cua-driver-darwin-x64'
     },
+    { from: 'build/macman-connectors', to: 'macman-connectors' },
     { from: 'THIRD_PARTY_NOTICES.md', to: 'THIRD_PARTY_NOTICES.md' }
   ],
   asarUnpack: [...base.asarUnpack, '**/*.dylib'],
   mac: {
     ...base.mac,
-    binaries: ['Contents/Resources/cua-driver'],
+    binaries: [
+      'Contents/Resources/cua-driver',
+      'Contents/Resources/macman-connectors/**/gog',
+      'Contents/Resources/macman-connectors/**/imessage-cli'
+    ],
     // Local directory builds need a structurally valid signature for TCC and
     // launch testing. Release builds leave identity discovery untouched so a
     // Developer ID certificate can replace this with a distributable signature.
