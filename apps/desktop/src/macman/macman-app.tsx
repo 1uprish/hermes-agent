@@ -11,6 +11,7 @@ import {
   IconLock,
   IconLockAccess,
   IconMapPin,
+  IconMessageCircle,
   IconMicrophone,
   IconPlugConnected,
   IconRefresh,
@@ -21,13 +22,14 @@ import {
   IconSparkles,
   IconUserCircle
 } from '@tabler/icons-react'
-import { type ComponentType, type ReactNode, useMemo, useState } from 'react'
+import { type ComponentType, type ReactNode, useEffect, useMemo, useState } from 'react'
 
 import type { MacManPermissionId, MacManPermissionStatus, MacManSnapshot } from './native-contract'
 
 export type { MacManPermissionId, MacManPermissionStatus, MacManSnapshot } from './native-contract'
 
 export type MacManView =
+  | 'chat'
   | 'setup'
   | 'permissions'
   | 'general'
@@ -59,6 +61,7 @@ type PermissionDefinition = {
 }
 
 export type MacManAppProps = {
+  chat?: ReactNode
   initialView?: MacManView
   onComplete?: () => void
   onOpenModelSetup?: () => void
@@ -163,6 +166,7 @@ const PERMISSIONS: PermissionDefinition[] = [
 const NAV_GROUPS: Array<{ label?: string; items: Array<{ icon: IconType; id: MacManView; label: string }> }> = [
   {
     items: [
+      { id: 'chat', label: 'Chat', icon: IconMessageCircle },
       { id: 'setup', label: 'Setup', icon: IconSparkles },
       { id: 'permissions', label: 'Permissions', icon: IconShieldCheck }
     ]
@@ -309,6 +313,8 @@ function SetupView({
   const requiredReady =
     snapshot.permissions.accessibility === 'granted' && snapshot.permissions.screenRecording === 'granted'
 
+  const modelReady = snapshot.model === 'connected'
+
   const readyCount = Number(snapshot.permissions.accessibility === 'granted') + Number(snapshot.permissions.screenRecording === 'granted')
 
   return (
@@ -397,16 +403,27 @@ function SetupView({
       />
 
       <div className="mm-setup-footer">
-        <p>You can change every permission later in Permissions.</p>
+        <p>
+          {!requiredReady
+            ? 'Grant the two required permissions to continue.'
+            : !modelReady
+              ? 'Connect a model, then MacMan is ready to chat.'
+              : 'Everything is ready. Your permissions remain available in Settings.'}
+        </p>
         <div className="mm-footer-actions">
           {!requiredReady ? (
-            <button className="mm-button mm-button--quiet" onClick={onComplete} type="button">
-              Continue with chat only
+            <button className="mm-button mm-button--primary" disabled type="button">
+              Finish required permissions
             </button>
-          ) : null}
-          <button className="mm-button mm-button--primary" onClick={onComplete} type="button">
-            {requiredReady ? 'Finish setup' : 'Finish later'}
-          </button>
+          ) : !modelReady ? (
+            <button className="mm-button mm-button--primary" onClick={onOpenModelSetup} type="button">
+              Connect a model
+            </button>
+          ) : (
+            <button className="mm-button mm-button--primary" onClick={onComplete} type="button">
+              Let's go to MacMan
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -527,7 +544,7 @@ function SettingsPage({
 }: {
   notice?: string
   onSettingsAction?: (action: MacManSettingsAction) => void
-  view: Exclude<MacManView, 'setup' | 'permissions'>
+  view: Exclude<MacManView, 'chat' | 'setup' | 'permissions'>
   wrapperStatus: NonNullable<MacManSnapshot['wrapper']>
 }) {
   if (view === 'general') {
@@ -740,6 +757,7 @@ function ConnectionRow({
 }
 
 export function MacManApp({
+  chat,
   initialView = 'setup',
   onComplete,
   onOpenModelSetup,
@@ -750,12 +768,26 @@ export function MacManApp({
   settingsNotice,
   snapshot = DEFAULT_MACMAN_SNAPSHOT
 }: MacManAppProps) {
-  const [activeView, setActiveView] = useState<MacManView>(initialView)
   const wrapperStatus = snapshot.wrapper
+
+  const chatReady =
+    snapshot.model === 'connected' &&
+    snapshot.permissions.accessibility === 'granted' &&
+    snapshot.permissions.screenRecording === 'granted'
+
+  const [activeView, setActiveView] = useState<MacManView>(() =>
+    initialView === 'chat' && !chatReady ? 'setup' : initialView
+  )
+
+  useEffect(() => {
+    if (activeView === 'chat' && !chatReady) {
+      setActiveView('setup')
+    }
+  }, [activeView, chatReady])
 
   const completeSetup = () => {
     onComplete?.()
-    setActiveView('general')
+    setActiveView('chat')
   }
 
   const activeLabel = useMemo(
@@ -787,6 +819,7 @@ export function MacManApp({
                   <button
                     aria-current={activeView === item.id ? 'page' : undefined}
                     className={`mm-nav-item ${activeView === item.id ? 'is-active' : ''}`}
+                    disabled={item.id === 'chat' && !chatReady}
                     key={item.id}
                     onClick={() => setActiveView(item.id)}
                     type="button"
@@ -811,7 +844,9 @@ export function MacManApp({
         </div>
       </aside>
       <main aria-label={activeLabel} className="mm-main">
-        {activeView === 'setup' ? (
+        {activeView === 'chat' ? (
+          chat ?? <div className="mm-chat-unavailable" role="status">MacMan chat is unavailable.</div>
+        ) : activeView === 'setup' ? (
           <SetupView
             onComplete={completeSetup}
             onOpenModelSetup={onOpenModelSetup}

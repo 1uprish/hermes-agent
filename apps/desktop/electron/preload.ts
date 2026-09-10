@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('macManNative', {
   cancelModelLogin: sessionId => ipcRenderer.invoke('macman:model:cancel-login', sessionId),
   checkForUpdates: () => ipcRenderer.invoke('hermes:updates:check'),
   exportData: data => ipcRenderer.invoke('macman:data:export', data),
+  getChatConnection: () => ipcRenderer.invoke('hermes:connection'),
+  getFreshChatConnection: () => ipcRenderer.invoke('hermes:gateway:ws-url'),
   getModelCatalog: () => ipcRenderer.invoke('macman:model:catalog'),
   openLogs: () => ipcRenderer.invoke('hermes:logs:reveal'),
   openModelProviderSetup: providerId => ipcRenderer.invoke('macman:model:open-provider-setup', providerId),

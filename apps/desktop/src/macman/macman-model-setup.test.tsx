@@ -30,6 +30,8 @@ function bridge(overrides: Partial<MacManNativeBridge> = {}): MacManNativeBridge
     cancelModelLogin: vi.fn(),
     checkForUpdates: vi.fn(),
     exportData: vi.fn(),
+    getChatConnection: vi.fn().mockResolvedValue({ authMode: 'token', wsUrl: 'ws://macman.test/ws' }),
+    getFreshChatConnection: vi.fn().mockResolvedValue({ ok: true, wsUrl: 'ws://macman.test/ws' }),
     getModelCatalog: vi.fn().mockResolvedValue(catalog),
     openLogs: vi.fn(),
     openModelProviderSetup: vi.fn(),

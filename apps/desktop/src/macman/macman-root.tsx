@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { DEFAULT_MACMAN_SNAPSHOT, MacManApp, type MacManSettingsAction } from './macman-app'
+import { MacManChat } from './macman-chat'
+import { createMacManChatClient } from './macman-chat-client'
 import { MacManModelSetup } from './macman-model-setup'
 import type { MacManNativeBridge, MacManPermissionId, MacManSnapshot } from './native-contract'
 
@@ -23,6 +25,7 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
   )
 
   const requestGeneration = useRef(0)
+  const [chatClient] = useState(() => createMacManChatClient(bridge ?? undefined))
   const [modelSetupOpen, setModelSetupOpen] = useState(false)
   const [settingsNotice, setSettingsNotice] = useState<string>()
 
@@ -226,6 +229,7 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
   return (
     <>
       <MacManApp
+        chat={<MacManChat client={chatClient} />}
         onOpenModelSetup={() => setModelSetupOpen(true)}
         onOpenSystemSettings={openSystemSettings}
         onRefresh={refresh}

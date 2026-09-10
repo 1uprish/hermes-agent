@@ -164,14 +164,6 @@ describe('standalone MacMan frontend', () => {
     expect(onSettingsAction).toHaveBeenCalledWith('export-data')
   })
 
-  it('leaves setup through a real destination even when the parent has no completion handler', () => {
-    render(<MacManApp snapshot={snapshot} />)
-
-    fireEvent.click(screen.getByRole('button', { name: 'Finish later' }))
-
-    expect(screen.getByRole('heading', { name: 'General' })).toBeTruthy()
-  })
-
   it('gates the MacMan chat until setup is ready, then opens the chat instead of settings', () => {
     const chat = <section><h1>MacMan chat</h1></section>
     const { rerender } = render(<MacManApp chat={chat} snapshot={snapshot} />)
@@ -194,5 +186,8 @@ describe('standalone MacMan frontend', () => {
 
     expect(screen.getByRole('heading', { name: 'MacMan chat' })).toBeTruthy()
     expect(screen.queryByRole('heading', { name: 'General' })).toBeNull()
+
+    rerender(<MacManApp chat={chat} snapshot={snapshot} />)
+    expect(screen.getByRole('heading', { name: 'Set up MacMan' })).toBeTruthy()
   })
 })

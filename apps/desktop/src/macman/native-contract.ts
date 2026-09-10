@@ -57,10 +57,19 @@ export type MacManModelLoginResult = {
   status: 'approved' | 'denied' | 'error' | 'expired' | 'pending'
 }
 
+export type MacManChatConnection = {
+  authMode?: 'oauth' | 'token'
+  wsUrl: string
+}
+
+export type MacManFreshChatConnection = string | { error?: string; ok: boolean; wsUrl?: string }
+
 export type MacManNativeBridge = {
   cancelModelLogin(sessionId: string): Promise<void>
   checkForUpdates(): Promise<unknown>
   exportData(data: unknown): Promise<{ canceled: boolean; path?: string }>
+  getChatConnection(): Promise<MacManChatConnection>
+  getFreshChatConnection(): Promise<MacManFreshChatConnection>
   getModelCatalog(): Promise<MacManModelCatalog>
   openLogs(): Promise<{ error?: string; ok: boolean; path?: string }>
   openModelProviderSetup(providerId: string): Promise<{ copiedCommand: boolean; openedUrl: boolean }>

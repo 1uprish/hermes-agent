@@ -20,11 +20,12 @@ function fakeClient() {
   const client: MacManChatClient = {
     connect: vi.fn(async () => listener?.(readySnapshot)),
     dispose: vi.fn(),
-    getSnapshot: vi.fn(() => ({ busy: false, messages: [], status: 'connecting' })),
+    getSnapshot: vi.fn(() => ({ busy: false, messages: [], status: 'connecting' as const })),
     retry: vi.fn(),
     send: vi.fn().mockResolvedValue(undefined),
     subscribe: vi.fn(next => {
       listener = next
+
       return () => {
         listener = undefined
       }
