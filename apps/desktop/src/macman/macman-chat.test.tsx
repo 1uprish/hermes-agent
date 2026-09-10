@@ -71,6 +71,50 @@ describe('MacMan continuous chat', () => {
     expect(container.querySelector('.mm-chat-thinking span')).toBeNull()
   })
 
+  it('keeps the composer usable while working and shows how a follow-up was routed', async () => {
+    const client = fakeClient({
+      ...readySnapshot,
+      busy: true,
+      messages: [
+        ...readySnapshot.messages,
+        {
+          dispatch: { route: 'parallel', state: 'running', taskId: 'bg-1' },
+          id: 'user-2',
+          role: 'user',
+          text: 'Meanwhile find flights to Tokyo'
+        }
+      ]
+    })
+
+    render(<MacManChat client={client} />)
+
+    expect(await screen.findByText('Running in parallel')).toBeTruthy()
+    const composer = screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message MacMan' })
+    expect(composer.disabled).toBe(false)
+
+    fireEvent.change(composer, { target: { value: 'Also use direct flights only' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() => expect(client.send).toHaveBeenCalledWith('Also use direct flights only'))
+  })
+
+  it('renders concise live activity without exposing event internals', async () => {
+    const client = fakeClient({
+      ...readySnapshot,
+      activities: [
+        { id: 'tool-1', kind: 'tool', label: 'Opening the signed-in browser', state: 'running' },
+        { id: 'status-1', kind: 'status', label: 'Checking the page', state: 'running' }
+      ],
+      busy: true
+    })
+
+    render(<MacManChat client={client} />)
+
+    expect(await screen.findByRole('region', { name: 'Live activity' })).toBeTruthy()
+    expect(screen.getByText('Opening the signed-in browser')).toBeTruthy()
+    expect(screen.getByText('Checking the page')).toBeTruthy()
+  })
+
   it('shows connected models in the composer and labels the model whose limit was exhausted', async () => {
     const client = fakeClient({
       ...readySnapshot,
