@@ -8,9 +8,29 @@ export interface MacManChatMessage {
   text: string
 }
 
+export interface MacManActiveModel {
+  model: string
+  provider: string
+}
+
+export interface MacManModelLimit {
+  kind: 'exhausted' | 'rate-limited'
+  message: string
+  model: string
+  provider: string
+}
+
+export interface MacManModelSwitchResult {
+  confirmationMessage?: string
+  confirmRequired: boolean
+  deferred?: boolean
+}
+
 export interface MacManChatSnapshot {
+  activeModel?: MacManActiveModel
   busy: boolean
   error?: string
+  limitedModels?: Record<string, MacManModelLimit>
   messages: MacManChatMessage[]
   status: 'connecting' | 'error' | 'ready'
 }
@@ -22,6 +42,7 @@ export interface MacManChatClient {
   retry(): Promise<void>
   send(text: string): Promise<void>
   subscribe(listener: (snapshot: MacManChatSnapshot) => void): () => void
+  switchModel(provider: string, model: string, confirmExpensiveModel?: boolean): Promise<MacManModelSwitchResult>
 }
 
 interface MacManGatewayHost {
@@ -235,6 +256,7 @@ interface SessionMessage {
 }
 
 interface SessionStart {
+  info?: Record<string, unknown>
   messages?: SessionMessage[]
   session_id: string
   stored_session_id?: string
@@ -286,13 +308,37 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function modelSelection(value: unknown): MacManActiveModel | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+
+  const info = value as Record<string, unknown>
+  const model = typeof info.model === 'string' ? info.model.trim() : ''
+  const provider = typeof info.provider === 'string' ? info.provider.trim() : ''
+
+  return model && provider ? { model, provider } : undefined
+}
+
+function modelKey(selection: MacManActiveModel): string {
+  return `${selection.provider}:${selection.model}`
+}
+
+function modelLimitKind(message: string): MacManModelLimit['kind'] | undefined {
+  if (/usage limit|out of credits|insufficient[_ ]quota|credit balance/i.test(message)) {
+    return 'exhausted'
+  }
+
+  return /\b429\b|rate limit/i.test(message) ? 'rate-limited' : undefined
+}
+
 class MacManChatGatewayClient implements MacManChatClient {
   private gateway?: MacManChatTransport
   private connectFlight?: Promise<void>
   private connectionGeneration = 0
   private listeners = new Set<(snapshot: MacManChatSnapshot) => void>()
   private runtimeSessionId?: string
-  private state: MacManChatSnapshot = { busy: false, messages: [], status: 'connecting' }
+  private state: MacManChatSnapshot = { busy: false, limitedModels: {}, messages: [], status: 'connecting' }
   private streamMessageId?: string
 
   constructor(
@@ -362,7 +408,8 @@ class MacManChatGatewayClient implements MacManChatClient {
     try {
       await this.gateway.request('prompt.submit', { session_id: this.runtimeSessionId, text: prompt })
     } catch (error) {
-      this.publish({ ...this.state, busy: false, error: errorMessage(error) })
+      const message = errorMessage(error)
+      this.publish({ ...this.state, busy: false, error: message, limitedModels: this.limitsAfterError(message) })
     }
   }
 
@@ -371,6 +418,49 @@ class MacManChatGatewayClient implements MacManChatClient {
     listener(this.state)
 
     return () => this.listeners.delete(listener)
+  }
+
+  async switchModel(
+    provider: string,
+    model: string,
+    confirmExpensiveModel = false
+  ): Promise<MacManModelSwitchResult> {
+    const cleanProvider = provider.trim()
+    const cleanModel = model.trim()
+
+    if (!this.gateway || !this.runtimeSessionId || this.state.status !== 'ready') {
+      throw new Error('MacMan chat is not connected.')
+    }
+
+    if (!/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(cleanProvider) || !cleanModel || /\s/.test(cleanModel)) {
+      throw new Error('MacMan received an invalid model selection.')
+    }
+
+    const response = await this.gateway.request<{
+      confirm_message?: string
+      confirm_required?: boolean
+      deferred?: boolean
+    }>('config.set', {
+      key: 'model',
+      session_id: this.runtimeSessionId,
+      value: `${cleanModel} --provider ${cleanProvider} --session`,
+      ...(confirmExpensiveModel ? { confirm_expensive_model: true } : {})
+    })
+
+    if (response.confirm_required) {
+      return {
+        confirmationMessage: response.confirm_message?.trim() || 'Confirm this model switch?',
+        confirmRequired: true
+      }
+    }
+
+    this.publish({
+      ...this.state,
+      activeModel: { model: cleanModel, provider: cleanProvider },
+      error: undefined
+    })
+
+    return { confirmRequired: false, deferred: response.deferred }
   }
 
   private appendAssistantDelta(text: string): void {
@@ -413,11 +503,13 @@ class MacManChatGatewayClient implements MacManChatClient {
     }
 
     const failed = payload.status === 'error'
+    const failureMessage = failed ? textFromContent(payload.error) || 'MacMan could not finish that response.' : undefined
     this.streamMessageId = undefined
     this.publish({
       ...this.state,
       busy: false,
-      error: failed ? textFromContent(payload.error) || 'MacMan could not finish that response.' : undefined
+      error: failureMessage,
+      limitedModels: failureMessage ? this.limitsAfterError(failureMessage) : this.limitsAfterSuccess()
     })
   }
 
@@ -435,12 +527,20 @@ class MacManChatGatewayClient implements MacManChatClient {
       this.appendAssistantDelta(textFromContent(payload.text))
     } else if (event.type === 'message.complete') {
       this.completeAssistant(payload)
+    } else if (event.type === 'session.info') {
+      const activeModel = modelSelection(payload)
+
+      if (activeModel) {
+        this.publish({ ...this.state, activeModel })
+      }
     } else if (event.type === 'error') {
+      const message = textFromContent(payload.message) || textFromContent(payload.error) || 'MacMan hit an unexpected error.'
       this.streamMessageId = undefined
       this.publish({
         ...this.state,
         busy: false,
-        error: textFromContent(payload.message) || textFromContent(payload.error) || 'MacMan hit an unexpected error.'
+        error: message,
+        limitedModels: this.limitsAfterError(message)
       })
     }
   }
@@ -518,8 +618,10 @@ class MacManChatGatewayClient implements MacManChatClient {
 
       this.runtimeSessionId = session.session_id
       this.publish({
+        activeModel: modelSelection(session.info) ?? this.state.activeModel,
         busy: false,
         error: undefined,
+        limitedModels: this.state.limitedModels,
         messages: hydrateMessages(session.messages),
         status: 'ready'
       })
@@ -537,6 +639,34 @@ class MacManChatGatewayClient implements MacManChatClient {
   private publish(next: MacManChatSnapshot): void {
     this.state = next
     this.listeners.forEach(listener => listener(next))
+  }
+
+  private limitsAfterError(message: string): Record<string, MacManModelLimit> {
+    const activeModel = this.state.activeModel
+    const kind = modelLimitKind(message)
+
+    if (!activeModel || !kind) {
+      return this.state.limitedModels ?? {}
+    }
+
+    return {
+      ...this.state.limitedModels,
+      [modelKey(activeModel)]: { ...activeModel, kind, message }
+    }
+  }
+
+  private limitsAfterSuccess(): Record<string, MacManModelLimit> {
+    const activeModel = this.state.activeModel
+    const limitedModels = this.state.limitedModels ?? {}
+
+    if (!activeModel || !limitedModels[modelKey(activeModel)]) {
+      return limitedModels
+    }
+
+    const next = { ...limitedModels }
+    delete next[modelKey(activeModel)]
+
+    return next
   }
 }
 

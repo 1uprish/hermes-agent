@@ -105,6 +105,23 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
       .catch(() => undefined)
   }, [bridge])
 
+  const loadModelCatalog = useCallback(() => {
+    if (!bridge) {
+      return Promise.reject(new Error('The MacMan wrapper is not connected.'))
+    }
+
+    return bridge.getModelCatalog()
+  }, [bridge])
+
+  const showActiveChatModel = useCallback((selection: { model: string; provider: string }) => {
+    setSnapshot(current => ({
+      ...current,
+      model: 'connected',
+      modelName: selection.model,
+      modelProvider: selection.provider
+    }))
+  }, [])
+
   const runSettingsAction = useCallback(
     async (action: MacManSettingsAction) => {
       if (!bridge) {
@@ -229,7 +246,14 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
   return (
     <>
       <MacManApp
-        chat={<MacManChat client={chatClient} />}
+        chat={
+          <MacManChat
+            client={chatClient}
+            loadModelCatalog={bridge ? loadModelCatalog : undefined}
+            onActiveModelChange={showActiveChatModel}
+            onManageModels={() => setModelSetupOpen(true)}
+          />
+        }
         onOpenModelSetup={() => setModelSetupOpen(true)}
         onOpenSystemSettings={openSystemSettings}
         onRefresh={refresh}
@@ -243,12 +267,10 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
           bridge={bridge}
           onClose={() => setModelSetupOpen(false)}
           onConnected={selection => {
-            setSnapshot(current => ({
-                ...current,
-                model: 'connected',
-                modelName: selection.model,
-                modelProvider: selection.provider
-            }))
+            showActiveChatModel(selection)
+            void chatClient.switchModel(selection.provider, selection.model).catch(error => {
+              setSettingsNotice(error instanceof Error ? error.message : String(error))
+            })
             refreshModel()
           }}
         />

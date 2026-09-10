@@ -83,6 +83,7 @@ describe('MacMan continuous chat', () => {
         }
       }
     })
+
     const loadModelCatalog = vi.fn().mockResolvedValue({
       connected: true,
       current: { model: 'deepseek-v4-pro', provider: 'deepseek' },
@@ -111,7 +112,7 @@ describe('MacMan continuous chat', () => {
 
     expect(await screen.findByText('ChatGPT')).toBeTruthy()
     expect(screen.getByText('DeepSeek')).toBeTruthy()
-    expect(screen.getByText('Limit reached')).toBeTruthy()
+    expect(screen.getAllByText('Limit reached')).toHaveLength(2)
 
     fireEvent.click(screen.getByRole('button', { name: 'Use deepseek-v4-pro' }))
 

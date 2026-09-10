@@ -2,13 +2,18 @@ import { IconArrowUp, IconRefresh } from '@tabler/icons-react'
 import { useEffect, useRef, useState } from 'react'
 
 import type { MacManChatClient, MacManChatSnapshot } from './macman-chat-client'
+import { MacManModelSelector } from './macman-model-selector'
 import { MacManThinkingMark } from './macman-thinking-mark'
+import type { MacManModelCatalog } from './native-contract'
 
 interface MacManChatProps {
   client: MacManChatClient
+  loadModelCatalog?: () => Promise<MacManModelCatalog>
+  onActiveModelChange?: (model: { model: string; provider: string }) => void
+  onManageModels?: () => void
 }
 
-export function MacManChat({ client }: MacManChatProps) {
+export function MacManChat({ client, loadModelCatalog, onActiveModelChange, onManageModels }: MacManChatProps) {
   const [draft, setDraft] = useState('')
   const [snapshot, setSnapshot] = useState<MacManChatSnapshot>(() => client.getSnapshot())
   const transcriptRef = useRef<HTMLDivElement>(null)
@@ -36,6 +41,12 @@ export function MacManChat({ client }: MacManChatProps) {
       transcript.scrollTop = transcript.scrollHeight
     }
   }, [snapshot.messages])
+
+  useEffect(() => {
+    if (snapshot.activeModel) {
+      onActiveModelChange?.(snapshot.activeModel)
+    }
+  }, [onActiveModelChange, snapshot.activeModel])
 
   const submit = () => {
     const message = draft.trim()
@@ -117,15 +128,31 @@ export function MacManChat({ client }: MacManChatProps) {
             rows={1}
             value={draft}
           />
-          <button
-            aria-label="Send message"
-            className="mm-chat-send"
-            disabled={!draft.trim() || snapshot.busy || snapshot.status !== 'ready'}
-            onClick={submit}
-            type="button"
-          >
-            <IconArrowUp aria-hidden size={17} stroke={2.2} />
-          </button>
+          <div className="mm-chat-composer-actions">
+            {loadModelCatalog ? (
+              <MacManModelSelector
+                activeModel={snapshot.activeModel}
+                busy={snapshot.busy || snapshot.status !== 'ready'}
+                limitedModels={snapshot.limitedModels}
+                loadCatalog={loadModelCatalog}
+                onManageModels={onManageModels}
+                onSelectModel={(provider, model, confirm) =>
+                  confirm ? client.switchModel(provider, model, true) : client.switchModel(provider, model)
+                }
+              />
+            ) : (
+              <span />
+            )}
+            <button
+              aria-label="Send message"
+              className="mm-chat-send"
+              disabled={!draft.trim() || snapshot.busy || snapshot.status !== 'ready'}
+              onClick={submit}
+              type="button"
+            >
+              <IconArrowUp aria-hidden size={17} stroke={2.2} />
+            </button>
+          </div>
         </div>
         <p className="mm-chat-hint">Return to send · Shift–Return for a new line</p>
       </div>
