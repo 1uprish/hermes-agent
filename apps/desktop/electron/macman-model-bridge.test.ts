@@ -10,6 +10,7 @@ function fakeModelBackend() {
   const events: Array<{ body?: unknown; method?: string; path: string }> = []
   const opened: string[] = []
   const copied: string[] = []
+  const terminals: string[] = []
 
   const request = async (input: { body?: unknown; method?: string; path: string }) => {
     events.push(input)
@@ -104,10 +105,14 @@ function fakeModelBackend() {
     copied,
     events,
     opened,
+    terminals,
     controller: createMacManModelBridgeController({
       copyText: value => copied.push(value),
       openExternal: async url => {
         opened.push(url)
+      },
+      openTerminal: async () => {
+        terminals.push('opened')
       },
       request
     })
@@ -128,6 +133,17 @@ test('MacMan builds its own provider catalog from the existing Hermes provider r
       ['qwen-oauth', 'Qwen', 'external']
     ]
   )
+})
+
+test('external provider setup copies its existing command and opens Terminal plus documentation', async () => {
+  const fake = fakeModelBackend()
+
+  const result = await fake.controller.openProviderSetup('qwen-oauth')
+
+  assert.deepEqual(result, { copiedCommand: true, openedUrl: true })
+  assert.deepEqual(fake.copied, ['hermes auth add qwen-oauth'])
+  assert.deepEqual(fake.terminals, ['opened'])
+  assert.deepEqual(fake.opened, ['https://example.com/qwen'])
 })
 
 test('ChatGPT login opens the browser with its code already copied and polls the existing session route', async () => {

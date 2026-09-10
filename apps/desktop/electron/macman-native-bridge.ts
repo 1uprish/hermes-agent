@@ -32,7 +32,10 @@ export type MacManNativeBridgeDependencies = {
   getCuaController(): Promise<MacManCuaControllerLike | null>
   getMicrophoneStatus(): MicrophoneStatus
   openExternal(url: string): Promise<unknown>
+  requestAccessibility(): Promise<boolean>
   requestMicrophone(): Promise<boolean>
+  requestNotification(): Promise<void>
+  requestScreenRecording(): Promise<boolean>
 }
 
 export const MACMAN_PERMISSION_SETTINGS_URLS: Record<MacManNativePermissionId, string> = {
@@ -145,18 +148,39 @@ export function createMacManNativeBridgeController(dependencies: MacManNativeBri
     async requestPermission(permission: MacManNativePermissionId): Promise<MacManNativeSnapshot> {
       assertPermissionId(permission)
 
-      if (permission === 'accessibility' || permission === 'screenRecording') {
-        try {
-          const cua = await (await controller()).requestPermissionsFromUserAction()
+      if (permission === 'accessibility') {
+        const granted = await dependencies.requestAccessibility()
 
-          return connectedSnapshot(cua, dependencies.getMicrophoneStatus())
-        } catch (error) {
-          return disconnectedSnapshot(error, dependencies.getMicrophoneStatus())
+        if (!granted) {
+          await dependencies.openExternal(MACMAN_PERMISSION_SETTINGS_URLS.accessibility)
         }
+
+        return snapshot()
+      }
+
+      if (permission === 'screenRecording') {
+        const granted = await dependencies.requestScreenRecording()
+
+        if (!granted) {
+          await dependencies.openExternal(MACMAN_PERMISSION_SETTINGS_URLS.screenRecording)
+        }
+
+        return snapshot()
       }
 
       if (permission === 'microphone') {
-        await dependencies.requestMicrophone()
+        const granted = await dependencies.requestMicrophone()
+
+        if (!granted && dependencies.getMicrophoneStatus() !== 'not-determined') {
+          await dependencies.openExternal(MACMAN_PERMISSION_SETTINGS_URLS.microphone)
+        }
+
+        return snapshot()
+      }
+
+      if (permission === 'notifications') {
+        await dependencies.requestNotification()
+        await dependencies.openExternal(MACMAN_PERMISSION_SETTINGS_URLS.notifications)
 
         return snapshot()
       }

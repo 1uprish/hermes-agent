@@ -12,6 +12,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  desktopCapturer,
   dialog,
   net as electronNet,
   webContents as electronWebContents,
@@ -238,6 +239,7 @@ import {
   readMacManDistribution,
   userDataPathForDistribution
 } from './macman-distribution'
+import { createMacManModelBridgeController } from './macman-model-bridge'
 import { createMacManNativeBridgeController } from './macman-native-bridge'
 import { ensureMainWindow } from './main-window-lifecycle'
 import {
@@ -1725,13 +1727,52 @@ const macManNativeBridgeController = createMacManNativeBridgeController({
   openExternal(url) {
     return shell.openExternal(url)
   },
+  async requestAccessibility() {
+    return IS_MAC && systemPreferences.isTrustedAccessibilityClient(true)
+  },
   async requestMicrophone() {
     if (!IS_MAC || typeof systemPreferences.askForMediaAccess !== 'function') {
       return false
     }
 
     return systemPreferences.askForMediaAccess('microphone')
+  },
+  async requestNotification() {
+    if (!Notification.isSupported()) {
+      return
+    }
+
+    new Notification({
+      body: 'MacMan will use notifications for completed work and approvals.',
+      title: 'MacMan notifications'
+    }).show()
+  },
+  async requestScreenRecording() {
+    if (!IS_MAC) {
+      return false
+    }
+
+    try {
+      await desktopCapturer.getSources({ thumbnailSize: { height: 0, width: 0 }, types: ['screen'] })
+    } catch {
+      return false
+    }
+
+    return systemPreferences.getMediaAccessStatus('screen') === 'granted'
   }
+})
+
+const macManModelBridgeController = createMacManModelBridgeController({
+  copyText(value) {
+    clipboard.writeText(value)
+  },
+  openExternal(url) {
+    return shell.openExternal(url)
+  },
+  openTerminal() {
+    return shell.openPath('/System/Applications/Utilities/Terminal.app')
+  },
+  request: request => handleHermesApiRequest(request)
 })
 
 // Explicit "the user asked for a repair" flag. Repair used to signal intent by
@@ -16319,22 +16360,105 @@ ipcMain.handle('hermes:requestMicrophoneAccess', async () => {
   return systemPreferences.askForMediaAccess('microphone')
 })
 
-ipcMain.handle('macman:native:snapshot', () => macManNativeBridgeController.snapshot())
+function assertMacManDistribution(): void {
+  if (!MACMAN_DISTRIBUTION) {
+    throw new Error('MacMan native capabilities are unavailable in this distribution')
+  }
+}
+
+ipcMain.handle('macman:native:snapshot', () => {
+  assertMacManDistribution()
+
+  return macManNativeBridgeController.snapshot()
+})
 
 ipcMain.handle('macman:native:request-permission', (_event, permission) => {
-  if (!MACMAN_DISTRIBUTION) {
-    throw new Error('MacMan native permissions are unavailable in this distribution')
-  }
+  assertMacManDistribution()
 
   return macManNativeBridgeController.requestPermission(permission)
 })
 
 ipcMain.handle('macman:native:open-system-settings', (_event, permission) => {
-  if (!MACMAN_DISTRIBUTION) {
-    throw new Error('MacMan native permissions are unavailable in this distribution')
-  }
+  assertMacManDistribution()
 
   return macManNativeBridgeController.openSystemSettings(permission)
+})
+
+ipcMain.handle('macman:model:catalog', () => {
+  assertMacManDistribution()
+
+  return macManModelBridgeController.catalog()
+})
+
+ipcMain.handle('macman:model:start-login', (_event, providerId) => {
+  assertMacManDistribution()
+
+  return macManModelBridgeController.startLogin(providerId)
+})
+
+ipcMain.handle('macman:model:poll-login', (_event, providerId, sessionId) => {
+  assertMacManDistribution()
+
+  return macManModelBridgeController.pollLogin(providerId, sessionId)
+})
+
+ipcMain.handle('macman:model:cancel-login', (_event, sessionId) => {
+  assertMacManDistribution()
+
+  return macManModelBridgeController.cancelLogin(sessionId)
+})
+
+ipcMain.handle('macman:model:save-api-key', (_event, providerId, apiKey) => {
+  assertMacManDistribution()
+
+  return macManModelBridgeController.saveApiKey(providerId, apiKey)
+})
+
+ipcMain.handle('macman:model:select', (_event, providerId, modelId) => {
+  assertMacManDistribution()
+
+  return macManModelBridgeController.selectModel(providerId, modelId)
+})
+
+ipcMain.handle('macman:model:open-provider-setup', (_event, providerId) => {
+  assertMacManDistribution()
+
+  return macManModelBridgeController.openProviderSetup(providerId)
+})
+
+ipcMain.handle('macman:pick-exclusions', async () => {
+  assertMacManDistribution()
+
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'openDirectory', 'multiSelections'],
+    title: 'Exclude apps, files, or folders from MacMan'
+  })
+
+  return result.canceled ? [] : result.filePaths
+})
+
+ipcMain.handle('macman:data:export', async (_event, value) => {
+  assertMacManDistribution()
+
+  const serialized = JSON.stringify(value, null, 2)
+
+  if (!serialized || serialized.length > 1024 * 1024) {
+    throw new Error('MacMan settings export is invalid or too large')
+  }
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: 'MacMan Settings.json',
+    filters: [{ extensions: ['json'], name: 'JSON' }],
+    title: 'Export MacMan settings'
+  })
+
+  if (result.canceled || !result.filePath) {
+    return { canceled: true }
+  }
+
+  await fs.promises.writeFile(result.filePath, `${serialized}\n`, { encoding: 'utf8', mode: 0o600 })
+
+  return { canceled: false, path: result.filePath }
 })
 
 // read_window_below tool: which OS window is directly underneath this one.

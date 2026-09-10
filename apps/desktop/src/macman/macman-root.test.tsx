@@ -21,21 +21,37 @@ const missingAccess = {
   wrapper: 'connected' as const
 }
 
+function bridge(overrides: Partial<MacManNativeBridge> = {}): MacManNativeBridge {
+  return {
+    cancelModelLogin: vi.fn(),
+    checkForUpdates: vi.fn().mockResolvedValue({ available: false }),
+    exportData: vi.fn().mockResolvedValue({ canceled: false }),
+    getModelCatalog: vi.fn().mockResolvedValue({ connected: false, providers: [] }),
+    openLogs: vi.fn().mockResolvedValue({ ok: true }),
+    openModelProviderSetup: vi.fn(),
+    openSystemSettings: vi.fn(),
+    pickExcludedPaths: vi.fn().mockResolvedValue([]),
+    pollModelLogin: vi.fn(),
+    requestPermission: vi.fn(),
+    saveModelApiKey: vi.fn(),
+    selectModel: vi.fn(),
+    snapshot: vi.fn().mockResolvedValue(missingAccess),
+    startModelLogin: vi.fn(),
+    ...overrides
+  }
+}
+
 afterEach(cleanup)
 
 describe('MacMan wrapper root', () => {
   it('hydrates the standalone renderer from the native permission snapshot', async () => {
-    const bridge: MacManNativeBridge = {
-      openSystemSettings: vi.fn(),
-      requestPermission: vi.fn(),
-      snapshot: vi.fn().mockResolvedValue(missingAccess)
-    }
+    const native = bridge()
 
-    render(<MacManRoot bridge={bridge} />)
+    render(<MacManRoot bridge={native} />)
 
     expect(await screen.findByText('Wrapper connected')).toBeTruthy()
     expect(screen.getByText('1 of 2 ready')).toBeTruthy()
-    expect(bridge.snapshot).toHaveBeenCalledOnce()
+    expect(native.snapshot).toHaveBeenCalledOnce()
   })
 
   it('uses the returned native snapshot after a grant instead of updating optimistically', async () => {
@@ -44,17 +60,13 @@ describe('MacMan wrapper root', () => {
       permissions: { ...missingAccess.permissions, accessibility: 'granted' as const }
     }
 
-    const bridge: MacManNativeBridge = {
-      openSystemSettings: vi.fn(),
-      requestPermission: vi.fn().mockResolvedValue(granted),
-      snapshot: vi.fn().mockResolvedValue(missingAccess)
-    }
+    const native = bridge({ requestPermission: vi.fn().mockResolvedValue(granted) })
 
-    render(<MacManRoot bridge={bridge} />)
+    render(<MacManRoot bridge={native} />)
     await screen.findByText('Wrapper connected')
     fireEvent.click(screen.getByRole('button', { name: 'Grant Accessibility' }))
 
-    expect(bridge.requestPermission).toHaveBeenCalledWith('accessibility')
+    expect(native.requestPermission).toHaveBeenCalledWith('accessibility')
 
     await waitFor(() => expect(screen.getByText('Computer control ready')).toBeTruthy())
   })
@@ -68,17 +80,13 @@ describe('MacMan wrapper root', () => {
   })
 
   it('refreshes permission truth when the window regains focus', async () => {
-    const bridge: MacManNativeBridge = {
-      openSystemSettings: vi.fn(),
-      requestPermission: vi.fn(),
-      snapshot: vi.fn().mockResolvedValue(missingAccess)
-    }
+    const native = bridge()
 
-    render(<MacManRoot bridge={bridge} />)
+    render(<MacManRoot bridge={native} />)
     await screen.findByText('Wrapper connected')
     window.dispatchEvent(new Event('focus'))
 
-    await waitFor(() => expect(bridge.snapshot).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(native.snapshot).toHaveBeenCalledTimes(2))
   })
 
   it('does not let a stale launch snapshot overwrite a newer focus refresh', async () => {
@@ -89,9 +97,7 @@ describe('MacMan wrapper root', () => {
       permissions: { ...missingAccess.permissions, accessibility: 'granted' as const }
     }
 
-    const bridge: MacManNativeBridge = {
-      openSystemSettings: vi.fn(),
-      requestPermission: vi.fn(),
+    const native = bridge({
       snapshot: vi
         .fn()
         .mockImplementationOnce(
@@ -101,10 +107,10 @@ describe('MacMan wrapper root', () => {
             })
         )
         .mockResolvedValueOnce(ready)
-    }
+    })
 
-    render(<MacManRoot bridge={bridge} />)
-    await waitFor(() => expect(bridge.snapshot).toHaveBeenCalledOnce())
+    render(<MacManRoot bridge={native} />)
+    await waitFor(() => expect(native.snapshot).toHaveBeenCalledOnce())
     window.dispatchEvent(new Event('focus'))
 
     expect(await screen.findByText('Computer control ready')).toBeTruthy()
@@ -113,5 +119,33 @@ describe('MacMan wrapper root', () => {
     await Promise.resolve()
 
     expect(screen.getByText('Computer control ready')).toBeTruthy()
+  })
+
+  it('routes command settings through the narrow native bridge', async () => {
+    const native = bridge()
+
+    render(<MacManRoot bridge={native} />)
+    await screen.findByText('Wrapper connected')
+    fireEvent.click(screen.getByRole('button', { name: 'General' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
+    await waitFor(() => expect(native.checkForUpdates).toHaveBeenCalledOnce())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connections' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Set up Messages' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Set up Calendar' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Set up Reminders' }))
+    await waitFor(() => {
+      expect(native.requestPermission).toHaveBeenCalledWith('fullDiskAccess')
+      expect(native.requestPermission).toHaveBeenCalledWith('calendar')
+      expect(native.requestPermission).toHaveBeenCalledWith('reminders')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open logs' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Export MacMan data' }))
+    await waitFor(() => {
+      expect(native.openLogs).toHaveBeenCalledOnce()
+      expect(native.exportData).toHaveBeenCalledOnce()
+    })
   })
 })

@@ -13,9 +13,20 @@ const hudNativeDrag = hudWindowing?.nativeDrag === true
 const launchFlags = ipcRenderer.sendSync('hermes:launch-flags')
 
 contextBridge.exposeInMainWorld('macManNative', {
+  cancelModelLogin: sessionId => ipcRenderer.invoke('macman:model:cancel-login', sessionId),
+  checkForUpdates: () => ipcRenderer.invoke('hermes:updates:check'),
+  exportData: data => ipcRenderer.invoke('macman:data:export', data),
+  getModelCatalog: () => ipcRenderer.invoke('macman:model:catalog'),
+  openLogs: () => ipcRenderer.invoke('hermes:logs:reveal'),
+  openModelProviderSetup: providerId => ipcRenderer.invoke('macman:model:open-provider-setup', providerId),
   openSystemSettings: permission => ipcRenderer.invoke('macman:native:open-system-settings', permission),
+  pickExcludedPaths: () => ipcRenderer.invoke('macman:pick-exclusions'),
+  pollModelLogin: (providerId, sessionId) => ipcRenderer.invoke('macman:model:poll-login', providerId, sessionId),
   requestPermission: permission => ipcRenderer.invoke('macman:native:request-permission', permission),
-  snapshot: () => ipcRenderer.invoke('macman:native:snapshot')
+  saveModelApiKey: (providerId, apiKey) => ipcRenderer.invoke('macman:model:save-api-key', providerId, apiKey),
+  selectModel: (providerId, modelId) => ipcRenderer.invoke('macman:model:select', providerId, modelId),
+  snapshot: () => ipcRenderer.invoke('macman:native:snapshot'),
+  startModelLogin: providerId => ipcRenderer.invoke('macman:model:start-login', providerId)
 })
 
 contextBridge.exposeInMainWorld('hermesDesktop', {

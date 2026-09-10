@@ -63,6 +63,10 @@ module.exports = {
       CFBundleName: 'MacMan',
       NSAppleEventsUsageDescription:
         'MacMan controls other applications only when carrying out an action you requested.',
+      NSContactsUsageDescription:
+        'MacMan accesses contacts only when a task needs help identifying someone you named.',
+      NSLocationUsageDescription:
+        'MacMan uses your location only for local results such as weather, travel time, and nearby places.',
       NSScreenCaptureUsageDescription:
         'MacMan captures the screen so it can see and interact with applications you ask it to control.'
     }

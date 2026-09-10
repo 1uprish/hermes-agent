@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { DEFAULT_MACMAN_SNAPSHOT, MacManApp } from './macman-app'
+import { DEFAULT_MACMAN_SNAPSHOT, MacManApp, type MacManSettingsAction } from './macman-app'
+import { MacManModelSetup } from './macman-model-setup'
 import type { MacManNativeBridge, MacManPermissionId, MacManSnapshot } from './native-contract'
 
 type MacManRootProps = {
@@ -22,6 +23,8 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
   )
 
   const requestGeneration = useRef(0)
+  const [modelSetupOpen, setModelSetupOpen] = useState(false)
+  const [settingsNotice, setSettingsNotice] = useState<string>()
 
   const commitLatest = useCallback(async (operation: () => Promise<MacManSnapshot>) => {
     const generation = ++requestGeneration.current
@@ -30,7 +33,12 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
       const next = await operation()
 
       if (generation === requestGeneration.current) {
-        setSnapshot(next)
+        setSnapshot(current => ({
+          ...next,
+          model: current.model,
+          modelName: current.modelName,
+          modelProvider: current.modelProvider
+        }))
       }
     } catch (error) {
       if (generation === requestGeneration.current) {
@@ -74,21 +82,170 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
     [bridge, refresh]
   )
 
+  const refreshModel = useCallback(() => {
+    if (!bridge) {
+      return
+    }
+
+    void bridge
+      .getModelCatalog()
+      .then(catalog => {
+        setSnapshot(current => ({
+          ...current,
+          model: catalog.current ? 'connected' : 'not-connected',
+          modelName: catalog.current?.model,
+          modelProvider: catalog.current?.provider
+        }))
+      })
+      .catch(() => undefined)
+  }, [bridge])
+
+  const runSettingsAction = useCallback(
+    async (action: MacManSettingsAction) => {
+      if (!bridge) {
+        setSettingsNotice('The MacMan wrapper is not connected.')
+
+        return
+      }
+
+      setSettingsNotice(undefined)
+
+      try {
+        if (action === 'check-updates') {
+          const result = await bridge.checkForUpdates()
+          const response = result && typeof result === 'object' ? (result as Record<string, unknown>) : {}
+
+          setSettingsNotice(
+            typeof response.message === 'string'
+              ? response.message
+              : response.available === true
+                ? 'A MacMan update is available.'
+                : 'MacMan is up to date.'
+          )
+
+          return
+        }
+
+        if (action === 'manage-exclusions') {
+          const paths = await bridge.pickExcludedPaths()
+
+          if (paths.length > 0) {
+            window.localStorage.setItem('macman:setting:excluded-paths', JSON.stringify(paths))
+            setSettingsNotice(`${paths.length} exclusion${paths.length === 1 ? '' : 's'} saved.`)
+          }
+
+          return
+        }
+
+        if (action === 'open-logs') {
+          const result = await bridge.openLogs()
+
+          if (!result.ok) {
+            throw new Error(result.error || 'MacMan could not open its logs.')
+          }
+
+          setSettingsNotice('Opened MacMan logs in Finder.')
+
+          return
+        }
+
+        if (action === 'export-data') {
+          const settings: Record<string, string> = {}
+
+          for (let index = 0; index < window.localStorage.length; index += 1) {
+            const key = window.localStorage.key(index)
+
+            if (key?.startsWith('macman:')) {
+              settings[key] = window.localStorage.getItem(key) ?? ''
+            }
+          }
+
+          const result = await bridge.exportData({
+            exportedAt: new Date().toISOString(),
+            model: snapshot.modelName ? { name: snapshot.modelName, provider: snapshot.modelProvider } : null,
+            permissions: snapshot.permissions,
+            settings
+          })
+
+          if (!result.canceled) {
+            setSettingsNotice('Exported MacMan settings without credentials or task content.')
+          }
+
+          return
+        }
+
+        if (action === 'reset-data') {
+          if (!window.confirm('Reset MacMan settings? Your model credentials and task data will not be removed.')) {
+            return
+          }
+
+          const keys = Array.from({ length: window.localStorage.length }, (_value, index) =>
+            window.localStorage.key(index)
+          ).filter((key): key is string => Boolean(key?.startsWith('macman:')))
+
+          keys.forEach(key => window.localStorage.removeItem(key))
+          window.location.reload()
+
+          return
+        }
+
+        const permission =
+          action === 'connect-messages'
+            ? 'fullDiskAccess'
+            : action === 'connect-calendar'
+              ? 'calendar'
+              : 'reminders'
+
+        await bridge.requestPermission(permission)
+        setSettingsNotice('Opened the exact macOS permission pane for MacMan.')
+      } catch (error) {
+        setSettingsNotice(error instanceof Error ? error.message : String(error))
+      }
+    },
+    [bridge, snapshot.modelName, snapshot.modelProvider, snapshot.permissions]
+  )
+
   useEffect(() => {
     refresh()
-    window.addEventListener('focus', refresh)
+    refreshModel()
+
+    const refreshAll = () => {
+      refresh()
+      refreshModel()
+    }
+
+    window.addEventListener('focus', refreshAll)
 
     return () => {
-      window.removeEventListener('focus', refresh)
+      window.removeEventListener('focus', refreshAll)
     }
-  }, [refresh])
+  }, [refresh, refreshModel])
 
   return (
-    <MacManApp
-      onOpenSystemSettings={openSystemSettings}
-      onRefresh={refresh}
-      onRequestPermission={requestPermission}
-      snapshot={snapshot}
-    />
+    <>
+      <MacManApp
+        onOpenModelSetup={() => setModelSetupOpen(true)}
+        onOpenSystemSettings={openSystemSettings}
+        onRefresh={refresh}
+        onRequestPermission={requestPermission}
+        onSettingsAction={action => void runSettingsAction(action)}
+        settingsNotice={settingsNotice}
+        snapshot={snapshot}
+      />
+      {bridge && modelSetupOpen ? (
+        <MacManModelSetup
+          bridge={bridge}
+          onClose={() => setModelSetupOpen(false)}
+          onConnected={selection =>
+            setSnapshot(current => ({
+              ...current,
+              model: 'connected',
+              modelName: selection.model,
+              modelProvider: selection.provider
+            }))
+          }
+        />
+      ) : null}
+    </>
   )
 }

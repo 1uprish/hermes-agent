@@ -28,9 +28,13 @@ const catalog: MacManModelCatalog = {
 function bridge(overrides: Partial<MacManNativeBridge> = {}): MacManNativeBridge {
   return {
     cancelModelLogin: vi.fn(),
+    checkForUpdates: vi.fn(),
+    exportData: vi.fn(),
     getModelCatalog: vi.fn().mockResolvedValue(catalog),
+    openLogs: vi.fn(),
     openModelProviderSetup: vi.fn(),
     openSystemSettings: vi.fn(),
+    pickExcludedPaths: vi.fn(),
     pollModelLogin: vi.fn().mockResolvedValue({ status: 'pending' }),
     requestPermission: vi.fn(),
     saveModelApiKey: vi.fn().mockResolvedValue(catalog),
@@ -61,6 +65,7 @@ describe('MacMan-owned model setup', () => {
         provider.id === 'openai-codex' ? { ...provider, authenticated: true } : provider
       )
     }
+
     const native = bridge({
       getModelCatalog: vi.fn().mockResolvedValueOnce(catalog).mockResolvedValueOnce(authenticated),
       pollModelLogin: vi.fn().mockResolvedValue({ status: 'approved' }),
@@ -88,6 +93,7 @@ describe('MacMan-owned model setup', () => {
         provider.id === 'openrouter' ? { ...provider, authenticated: true } : provider
       )
     }
+
     const native = bridge({ saveModelApiKey: vi.fn().mockResolvedValue(authenticated) })
 
     render(<MacManModelSetup bridge={native} onClose={vi.fn()} onConnected={vi.fn()} />)
@@ -103,10 +109,12 @@ describe('MacMan-owned model setup', () => {
   it('persists the selected model and closes only after native confirmation', async () => {
     const onClose = vi.fn()
     const onConnected = vi.fn()
+
     const connectedCatalog = {
       ...catalog,
       providers: catalog.providers.map(provider => ({ ...provider, authenticated: true }))
     }
+
     const native = bridge({
       getModelCatalog: vi.fn().mockResolvedValue(connectedCatalog),
       selectModel: vi.fn().mockResolvedValue({ model: 'gpt-5.5', provider: 'openai-codex' })
