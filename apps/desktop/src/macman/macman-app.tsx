@@ -361,11 +361,9 @@ function SetupView({
               <span className={`mm-status mm-status--${snapshot.model === 'connected' ? 'positive' : 'attention'}`}>
                 {snapshot.model === 'connected' ? 'Connected' : snapshot.model === 'checking' ? 'Checking' : 'Not connected'}
               </span>
-              {snapshot.model !== 'connected' ? (
-                <button className="mm-button mm-button--small" onClick={onOpenModelSetup} type="button">
-                  Connect model
-                </button>
-              ) : null}
+              <button className="mm-button mm-button--small" onClick={onOpenModelSetup} type="button">
+                {snapshot.model === 'connected' ? 'Change model' : 'Connect model'}
+              </button>
             </span>
           </div>
         </div>

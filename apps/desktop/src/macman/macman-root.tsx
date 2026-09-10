@@ -90,11 +90,13 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
     void bridge
       .getModelCatalog()
       .then(catalog => {
+        const currentProvider = catalog.providers.find(provider => provider.id === catalog.current?.provider)
+
         setSnapshot(current => ({
           ...current,
           model: catalog.current ? 'connected' : 'not-connected',
           modelName: catalog.current?.model,
-          modelProvider: catalog.current?.provider
+          modelProvider: currentProvider?.name ?? catalog.current?.provider
         }))
       })
       .catch(() => undefined)
@@ -236,14 +238,15 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
         <MacManModelSetup
           bridge={bridge}
           onClose={() => setModelSetupOpen(false)}
-          onConnected={selection =>
+          onConnected={selection => {
             setSnapshot(current => ({
-              ...current,
-              model: 'connected',
-              modelName: selection.model,
-              modelProvider: selection.provider
+                ...current,
+                model: 'connected',
+                modelName: selection.model,
+                modelProvider: selection.provider
             }))
-          }
+            refreshModel()
+          }}
         />
       ) : null}
     </>

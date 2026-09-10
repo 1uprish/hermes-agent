@@ -88,6 +88,21 @@ describe('standalone MacMan frontend', () => {
     expect(screen.getByText('Connected')).toBeTruthy()
   })
 
+  it('keeps model choice available after a model is connected', () => {
+    const onOpenModelSetup = vi.fn()
+
+    render(
+      <MacManApp
+        onOpenModelSetup={onOpenModelSetup}
+        snapshot={{ ...snapshot, model: 'connected', modelName: 'gpt-5.5', modelProvider: 'ChatGPT' }}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change model' }))
+    expect(onOpenModelSetup).toHaveBeenCalledOnce()
+    expect(screen.getByText('ChatGPT · gpt-5.5')).toBeTruthy()
+  })
+
   it('routes every command-style settings button to a real owner', () => {
     const onSettingsAction = vi.fn()
     render(<MacManApp initialView="general" onSettingsAction={onSettingsAction} snapshot={snapshot} />)
