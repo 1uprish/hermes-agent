@@ -13,10 +13,15 @@ const hudNativeDrag = hudWindowing?.nativeDrag === true
 const launchFlags = ipcRenderer.sendSync('hermes:launch-flags')
 
 contextBridge.exposeInMainWorld('macManNative', {
+  applyWhatsAppConnection: pairingId => ipcRenderer.invoke('macman:connections:whatsapp:apply', pairingId),
+  authorizeIMessage: () => ipcRenderer.invoke('macman:connections:imessage:authorize'),
   cancelModelLogin: sessionId => ipcRenderer.invoke('macman:model:cancel-login', sessionId),
+  cancelWhatsAppConnection: pairingId => ipcRenderer.invoke('macman:connections:whatsapp:cancel', pairingId),
   checkForUpdates: () => ipcRenderer.invoke('hermes:updates:check'),
+  connectGmail: email => ipcRenderer.invoke('macman:connections:gmail:connect', email),
   exportData: data => ipcRenderer.invoke('macman:data:export', data),
   getChatConnection: () => ipcRenderer.invoke('hermes:connection'),
+  getConnectionCatalog: () => ipcRenderer.invoke('macman:connections:catalog'),
   getFreshChatConnection: () => ipcRenderer.invoke('hermes:gateway:ws-url'),
   getModelCatalog: () => ipcRenderer.invoke('macman:model:catalog'),
   openLogs: () => ipcRenderer.invoke('hermes:logs:reveal'),
@@ -24,11 +29,13 @@ contextBridge.exposeInMainWorld('macManNative', {
   openSystemSettings: permission => ipcRenderer.invoke('macman:native:open-system-settings', permission),
   pickExcludedPaths: () => ipcRenderer.invoke('macman:pick-exclusions'),
   pollModelLogin: (providerId, sessionId) => ipcRenderer.invoke('macman:model:poll-login', providerId, sessionId),
+  pollWhatsAppConnection: pairingId => ipcRenderer.invoke('macman:connections:whatsapp:poll', pairingId),
   requestPermission: permission => ipcRenderer.invoke('macman:native:request-permission', permission),
   saveModelApiKey: (providerId, apiKey) => ipcRenderer.invoke('macman:model:save-api-key', providerId, apiKey),
   selectModel: (providerId, modelId) => ipcRenderer.invoke('macman:model:select', providerId, modelId),
   snapshot: () => ipcRenderer.invoke('macman:native:snapshot'),
-  startModelLogin: providerId => ipcRenderer.invoke('macman:model:start-login', providerId)
+  startModelLogin: providerId => ipcRenderer.invoke('macman:model:start-login', providerId),
+  startWhatsAppConnection: options => ipcRenderer.invoke('macman:connections:whatsapp:start', options)
 })
 
 contextBridge.exposeInMainWorld('hermesDesktop', {

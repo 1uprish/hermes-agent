@@ -234,6 +234,8 @@ import { buildHudWindowUrl } from './hud-url'
 import { resolveHudWindowing } from './hud-windowing'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
 import type { MacManCuaPermissionService } from './macman-cua-runtime'
+import { resolveMacManConnectorExecutable, runMacManConnector } from './macman-connector-runtime'
+import { createMacManConnectionsController } from './macman-connections-controller'
 import {
   applicationNameForDistribution,
   readMacManDistribution,
@@ -1773,6 +1775,32 @@ const macManModelBridgeController = createMacManModelBridgeController({
     return shell.openPath('/System/Applications/Utilities/Terminal.app')
   },
   request: request => handleHermesApiRequest(request)
+})
+
+const MACMAN_CONNECTOR_RESOURCES_ROOT = app.isPackaged ? process.resourcesPath : app.getAppPath()
+const MACMAN_CONNECTION_DATA_ROOT = path.join(app.getPath('userData'), 'connections')
+
+const macManConnectionsController = createMacManConnectionsController({
+  connectorExecutable(id) {
+    return resolveMacManConnectorExecutable(MACMAN_CONNECTOR_RESOURCES_ROOT, id)
+  },
+  getGmailCredentialsPath() {
+    const candidate = path.join(MACMAN_CONNECTOR_RESOURCES_ROOT, 'macman-connectors', 'gmail', 'oauth-client.json')
+
+    return fs.existsSync(candidate) ? candidate : null
+  },
+  getGmailHome() {
+    return path.join(MACMAN_CONNECTION_DATA_ROOT, 'gmail')
+  },
+  getIMessageDataDirectory() {
+    return path.join(MACMAN_CONNECTION_DATA_ROOT, 'imessage')
+  },
+  request: request => handleHermesApiRequest(request),
+  runConnector(executable, args) {
+    const interactive = args.includes('add') || args.includes('authorize')
+
+    return runMacManConnector(executable, args, { timeoutMs: interactive ? 6 * 60_000 : 30_000 })
+  }
 })
 
 // Explicit "the user asked for a repair" flag. Repair used to signal intent by
@@ -16424,6 +16452,48 @@ ipcMain.handle('macman:model:open-provider-setup', (_event, providerId) => {
   assertMacManDistribution()
 
   return macManModelBridgeController.openProviderSetup(providerId)
+})
+
+ipcMain.handle('macman:connections:catalog', () => {
+  assertMacManDistribution()
+
+  return macManConnectionsController.catalog()
+})
+
+ipcMain.handle('macman:connections:whatsapp:start', (_event, options) => {
+  assertMacManDistribution()
+
+  return macManConnectionsController.startWhatsApp(options)
+})
+
+ipcMain.handle('macman:connections:whatsapp:poll', (_event, pairingId) => {
+  assertMacManDistribution()
+
+  return macManConnectionsController.pollWhatsApp(pairingId)
+})
+
+ipcMain.handle('macman:connections:whatsapp:apply', (_event, pairingId) => {
+  assertMacManDistribution()
+
+  return macManConnectionsController.applyWhatsApp(pairingId)
+})
+
+ipcMain.handle('macman:connections:whatsapp:cancel', (_event, pairingId) => {
+  assertMacManDistribution()
+
+  return macManConnectionsController.cancelWhatsApp(pairingId)
+})
+
+ipcMain.handle('macman:connections:imessage:authorize', () => {
+  assertMacManDistribution()
+
+  return macManConnectionsController.authorizeIMessage()
+})
+
+ipcMain.handle('macman:connections:gmail:connect', (_event, email) => {
+  assertMacManDistribution()
+
+  return macManConnectionsController.connectGmail(email)
 })
 
 ipcMain.handle('macman:pick-exclusions', async () => {

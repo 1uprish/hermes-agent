@@ -27,10 +27,15 @@ const catalog: MacManModelCatalog = {
 
 function bridge(overrides: Partial<MacManNativeBridge> = {}): MacManNativeBridge {
   return {
+    applyWhatsAppConnection: vi.fn(),
+    authorizeIMessage: vi.fn(),
     cancelModelLogin: vi.fn(),
+    cancelWhatsAppConnection: vi.fn(),
     checkForUpdates: vi.fn(),
+    connectGmail: vi.fn(),
     exportData: vi.fn(),
     getChatConnection: vi.fn().mockResolvedValue({ authMode: 'token', wsUrl: 'ws://macman.test/ws' }),
+    getConnectionCatalog: vi.fn().mockResolvedValue({ connections: [] }),
     getFreshChatConnection: vi.fn().mockResolvedValue({ ok: true, wsUrl: 'ws://macman.test/ws' }),
     getModelCatalog: vi.fn().mockResolvedValue(catalog),
     openLogs: vi.fn(),
@@ -38,11 +43,13 @@ function bridge(overrides: Partial<MacManNativeBridge> = {}): MacManNativeBridge
     openSystemSettings: vi.fn(),
     pickExcludedPaths: vi.fn(),
     pollModelLogin: vi.fn().mockResolvedValue({ status: 'pending' }),
+    pollWhatsAppConnection: vi.fn(),
     requestPermission: vi.fn(),
     saveModelApiKey: vi.fn().mockResolvedValue(catalog),
     selectModel: vi.fn(),
     snapshot: vi.fn(),
     startModelLogin: vi.fn(),
+    startWhatsAppConnection: vi.fn(),
     ...overrides
   }
 }

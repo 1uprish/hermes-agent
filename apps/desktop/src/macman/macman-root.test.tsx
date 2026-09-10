@@ -23,10 +23,15 @@ const missingAccess = {
 
 function bridge(overrides: Partial<MacManNativeBridge> = {}): MacManNativeBridge {
   return {
+    applyWhatsAppConnection: vi.fn(),
+    authorizeIMessage: vi.fn(),
     cancelModelLogin: vi.fn(),
+    cancelWhatsAppConnection: vi.fn(),
     checkForUpdates: vi.fn().mockResolvedValue({ available: false }),
+    connectGmail: vi.fn(),
     exportData: vi.fn().mockResolvedValue({ canceled: false }),
     getChatConnection: vi.fn().mockResolvedValue({ authMode: 'token', wsUrl: 'ws://macman.test/ws' }),
+    getConnectionCatalog: vi.fn().mockResolvedValue({ connections: [] }),
     getFreshChatConnection: vi.fn().mockResolvedValue({ ok: true, wsUrl: 'ws://macman.test/ws' }),
     getModelCatalog: vi.fn().mockResolvedValue({ connected: false, providers: [] }),
     openLogs: vi.fn().mockResolvedValue({ ok: true }),
@@ -34,11 +39,13 @@ function bridge(overrides: Partial<MacManNativeBridge> = {}): MacManNativeBridge
     openSystemSettings: vi.fn(),
     pickExcludedPaths: vi.fn().mockResolvedValue([]),
     pollModelLogin: vi.fn(),
+    pollWhatsAppConnection: vi.fn(),
     requestPermission: vi.fn(),
     saveModelApiKey: vi.fn(),
     selectModel: vi.fn(),
     snapshot: vi.fn().mockResolvedValue(missingAccess),
     startModelLogin: vi.fn(),
+    startWhatsAppConnection: vi.fn(),
     ...overrides
   }
 }
