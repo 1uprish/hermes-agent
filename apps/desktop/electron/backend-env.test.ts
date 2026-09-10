@@ -127,6 +127,21 @@ test('buildDesktopBackendEnv extends PYTHONPATH and backend PATH together', () =
   assert.ok(env.PATH.includes('/opt/homebrew/bin'))
 })
 
+test('desktop backend can place bundled connector directories ahead of inherited tools', () => {
+  const env = buildDesktopBackendEnv({
+    hermesHome: '/Users/test/.hermes',
+    prependPathEntries: ['/Applications/MacMan.app/Contents/Resources/macman-connectors/gmail/arm64'],
+    currentEnv: { PATH: '/usr/local/bin:/usr/bin' },
+    platform: 'darwin',
+    pathModule: path.posix
+  })
+
+  assert.equal(
+    env.PATH.split(':')[0],
+    '/Applications/MacMan.app/Contents/Resources/macman-connectors/gmail/arm64'
+  )
+})
+
 test('buildDesktopBackendEnv forces PYTHONUTF8 unless the user set it explicitly', () => {
   const defaulted = buildDesktopBackendEnv({
     hermesHome: '/Users/test/.hermes',

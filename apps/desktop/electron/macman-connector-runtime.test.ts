@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import { afterEach, test } from 'vitest'
 
 import {
+  macManConnectorBackendEnvironment,
   macManConnectorResourcesRoot,
   resolveMacManConnectorExecutable,
   runMacManConnector
@@ -49,6 +50,19 @@ test('runtime resolution selects the host Gmail binary and universal local conne
   assert.equal(resolveMacManConnectorExecutable(root, 'imessage', 'arm64'), imessage)
   assert.equal(resolveMacManConnectorExecutable(root, 'whatsapp', 'arm64'), whatsapp)
   assert.equal(resolveMacManConnectorExecutable(root, 'gmail', 'x64'), null)
+})
+
+test('MacMan local chat receives only existing connector paths and private state locations', () => {
+  const root = resourcesRoot()
+  const gmail = executable(root, 'macman-connectors/gmail/arm64/gog')
+  const imessage = executable(root, 'macman-connectors/imessage/universal/imessage-cli')
+  const dataRoot = join(root, 'user-data')
+
+  assert.deepEqual(macManConnectorBackendEnvironment(root, dataRoot, 'arm64'), {
+    GOG_HOME: join(dataRoot, 'gmail'),
+    MACMAN_IMESSAGE_DATA_DIR: join(dataRoot, 'imessage'),
+    pathEntries: [dirname(gmail), dirname(imessage)]
+  })
 })
 
 test('connector execution captures structured output without a shell', async () => {
