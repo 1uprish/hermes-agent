@@ -389,6 +389,41 @@ function textFromContent(content: unknown): string {
     .join('')
 }
 
+function safeActivityLabel(content: unknown): string {
+  const compact = textFromContent(content)
+    .replace(/authorization\s*:\s*bearer\s+[^\s]+/gi, 'Authorization: Bearer [redacted]')
+    .replace(/\b(?:api[_-]?key|token|password|secret)\s*[=:]\s*[^\s]+/gi, '$1=[redacted]')
+    .replace(/\b(?:sk|ds)-[a-z0-9_-]{12,}\b/gi, '[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return compact.length > 280 ? `${compact.slice(0, 277)}…` : compact
+}
+
+function todoActivity(payload: Record<string, unknown>): MacManActivity | undefined {
+  if (!Array.isArray(payload.todos)) {
+    return undefined
+  }
+
+  const todos = payload.todos.filter(todo => todo && typeof todo === 'object') as Array<Record<string, unknown>>
+
+  if (!todos.length) {
+    return undefined
+  }
+
+  const complete = todos.filter(todo => ['complete', 'completed', 'done'].includes(String(todo.status))).length
+  const revision = typeof payload.revision === 'number' || typeof payload.revision === 'string'
+    ? String(payload.revision)
+    : 'current'
+
+  return {
+    id: `todo-${revision}`,
+    kind: 'task',
+    label: `${complete} of ${todos.length} steps complete`,
+    state: complete === todos.length ? 'complete' : 'running'
+  }
+}
+
 function visibleMessageText(message: SessionMessage): string {
   return textFromContent(message.display_content) || textFromContent(message.content) || textFromContent(message.text)
 }
@@ -823,7 +858,7 @@ class MacManChatGatewayClient implements MacManChatClient {
         this.publish({ ...this.state, activeModel })
       }
     } else if (event.type === 'status.update') {
-      const label = textFromContent(payload.text)
+      const label = safeActivityLabel(payload.text)
 
       if (label) {
         this.upsertActivity({
@@ -834,8 +869,8 @@ class MacManChatGatewayClient implements MacManChatClient {
         })
       }
     } else if (event.type === 'tool.start' || event.type === 'tool.progress' || event.type === 'tool.complete') {
-      const id = textFromContent(payload.tool_call_id) || textFromContent(payload.id) || `tool-${textFromContent(payload.name)}`
-      const label = textFromContent(payload.summary) || textFromContent(payload.context) || textFromContent(payload.preview) || textFromContent(payload.name)
+      const id = textFromContent(payload.tool_id) || textFromContent(payload.tool_call_id) || textFromContent(payload.id) || `tool-${textFromContent(payload.name)}`
+      const label = safeActivityLabel(payload.summary) || safeActivityLabel(payload.context) || safeActivityLabel(payload.preview) || safeActivityLabel(payload.name)
 
       if (id && label) {
         this.upsertActivity({
@@ -844,6 +879,18 @@ class MacManChatGatewayClient implements MacManChatClient {
           label,
           state: event.type === 'tool.complete' ? 'complete' : 'running'
         })
+      }
+    } else if (event.type === 'message.interim') {
+      const label = safeActivityLabel(payload.text)
+
+      if (label) {
+        this.upsertActivity({ id: 'interim-current', kind: 'status', label, state: 'running' })
+      }
+    } else if (event.type === 'todo.updated') {
+      const activity = todoActivity(payload)
+
+      if (activity) {
+        this.upsertActivity(activity)
       }
     } else if (event.type === 'background.complete') {
       const taskId = textFromContent(payload.task_id)
