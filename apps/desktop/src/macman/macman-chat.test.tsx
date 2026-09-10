@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { MacManChat } from './macman-chat'
 import type { MacManChatClient, MacManChatSnapshot } from './macman-chat-client'
+import { MacManThinkingMark } from './macman-thinking-mark'
 
 const readySnapshot: MacManChatSnapshot = {
   busy: false,
@@ -35,7 +36,11 @@ function fakeClient(connectedSnapshot = readySnapshot) {
   return client
 }
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
 
 describe('MacMan continuous chat', () => {
   it('hydrates the durable conversation and submits the next turn through its own composer', async () => {
@@ -62,5 +67,50 @@ describe('MacMan continuous chat', () => {
 
     expect(indicator.querySelector('img')?.getAttribute('src')).toBe('./macman-mark-transparent.png')
     expect(container.querySelector('.mm-chat-thinking span')).toBeNull()
+  })
+
+  it('starts the particle canvas when the cached mark loads immediately', async () => {
+    const pixels = new Uint8ClampedArray(48 * 48 * 4)
+
+    for (let y = 12; y < 36; y += 1) {
+      for (let x = 12; x < 36; x += 1) {
+        const offset = (y * 48 + x) * 4
+        pixels[offset] = 255
+        pixels[offset + 1] = 255
+        pixels[offset + 2] = 255
+        pixels[offset + 3] = 255
+      }
+    }
+
+    const context = {
+      arc: vi.fn(),
+      beginPath: vi.fn(),
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      fill: vi.fn(),
+      fillStyle: '',
+      getImageData: vi.fn(() => ({ data: pixels })),
+      globalAlpha: 1,
+      setTransform: vi.fn()
+    }
+
+    class CachedImage {
+      decoding = ''
+      onload: (() => void) | null = null
+
+      set src(_value: string) {
+        this.onload?.()
+      }
+    }
+
+    vi.stubGlobal('Image', CachedImage)
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false })))
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as never)
+
+    const { container } = render(<MacManThinkingMark />)
+
+    await waitFor(() => expect(container.querySelector('.mm-chat-thinking.is-ready')).toBeTruthy())
   })
 })
