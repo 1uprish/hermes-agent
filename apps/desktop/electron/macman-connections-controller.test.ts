@@ -91,7 +91,6 @@ test('catalog reports provider truth and never mistakes a bundled runtime for a 
   assert.deepEqual(await controller.catalog(), {
     connections: [
       {
-        account: 'Arv',
         capabilities: ['read', 'search', 'send', 'attachments'],
         id: 'whatsapp',
         lastSyncAt: '2026-09-10T08:00:00.000Z',
