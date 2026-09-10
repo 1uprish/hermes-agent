@@ -36,6 +36,19 @@ function fakeBridgeDependencies() {
       getMicrophoneStatus() {
         return microphone
       },
+      async requestAccessibility() {
+        events.push('accessibility:request')
+
+        return permissions.accessibility
+      },
+      async requestNotification() {
+        events.push('notification:request')
+      },
+      async requestScreenRecording() {
+        events.push('screen:request')
+
+        return permissions.screenRecording
+      },
       async openExternal(url: string) {
         events.push(`open:${url}`)
       },
@@ -71,8 +84,16 @@ test('explicit permission actions return refreshed truth instead of optimistic g
   const bridge = createMacManNativeBridgeController(fake.dependencies)
 
   const accessibility = await bridge.requestPermission('accessibility')
-  assert.equal(accessibility.permissions.accessibility, 'granted')
-  assert.deepEqual(fake.events, ['cua:request'])
+  assert.equal(accessibility.permissions.accessibility, 'not-granted')
+  assert.deepEqual(fake.events.slice(0, 3), [
+    'accessibility:request',
+    `open:${MACMAN_PERMISSION_SETTINGS_URLS.accessibility}`,
+    'cua:refresh'
+  ])
+
+  const screen = await bridge.requestPermission('screenRecording')
+  assert.equal(screen.permissions.screenRecording, 'granted')
+  assert.deepEqual(fake.events.slice(3, 5), ['screen:request', 'cua:refresh'])
 
   const microphone = await bridge.requestPermission('microphone')
   assert.equal(microphone.permissions.microphone, 'granted')
@@ -83,6 +104,19 @@ test('explicit permission actions return refreshed truth instead of optimistic g
   assert.equal(fake.events.at(-2), `open:${MACMAN_PERMISSION_SETTINGS_URLS.fullDiskAccess}`)
 })
 
+test('notifications trigger native registration before opening their exact settings pane', async () => {
+  const fake = fakeBridgeDependencies()
+  const bridge = createMacManNativeBridgeController(fake.dependencies)
+
+  await bridge.requestPermission('notifications')
+
+  assert.deepEqual(fake.events.slice(0, 3), [
+    'notification:request',
+    `open:${MACMAN_PERMISSION_SETTINGS_URLS.notifications}`,
+    'cua:refresh'
+  ])
+})
+
 test('wrapper startup failure is surfaced as disconnected state rather than a false ready state', async () => {
   const bridge = createMacManNativeBridgeController({
     async getCuaController() {
@@ -90,7 +124,10 @@ test('wrapper startup failure is surfaced as disconnected state rather than a fa
     },
     getMicrophoneStatus: () => 'unknown',
     openExternal: async () => undefined,
-    requestMicrophone: async () => false
+    requestAccessibility: async () => false,
+    requestMicrophone: async () => false,
+    requestNotification: async () => undefined,
+    requestScreenRecording: async () => false
   })
 
   const snapshot = await bridge.snapshot()

@@ -87,4 +87,24 @@ describe('standalone MacMan frontend', () => {
     rerender(<MacManApp initialView="advanced" snapshot={{ ...snapshot, wrapper: 'connected' }} />)
     expect(screen.getByText('Connected')).toBeTruthy()
   })
+
+  it('routes every command-style settings button to a real owner', () => {
+    const onSettingsAction = vi.fn()
+    const { rerender } = render(
+      <MacManApp initialView="general" onSettingsAction={onSettingsAction} snapshot={snapshot} />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
+    expect(onSettingsAction).toHaveBeenCalledWith('check-updates')
+
+    rerender(<MacManApp initialView="privacy" onSettingsAction={onSettingsAction} snapshot={snapshot} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Manage exclusions' }))
+    expect(onSettingsAction).toHaveBeenCalledWith('manage-exclusions')
+
+    rerender(<MacManApp initialView="advanced" onSettingsAction={onSettingsAction} snapshot={snapshot} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open logs' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Export MacMan data' }))
+    expect(onSettingsAction).toHaveBeenCalledWith('open-logs')
+    expect(onSettingsAction).toHaveBeenCalledWith('export-data')
+  })
 })
