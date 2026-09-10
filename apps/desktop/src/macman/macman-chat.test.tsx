@@ -14,11 +14,11 @@ const readySnapshot: MacManChatSnapshot = {
   status: 'ready'
 }
 
-function fakeClient() {
+function fakeClient(connectedSnapshot = readySnapshot) {
   let listener: ((snapshot: MacManChatSnapshot) => void) | undefined
 
   const client: MacManChatClient = {
-    connect: vi.fn(async () => listener?.(readySnapshot)),
+    connect: vi.fn(async () => listener?.(connectedSnapshot)),
     dispose: vi.fn(),
     getSnapshot: vi.fn(() => ({ busy: false, messages: [], status: 'connecting' as const })),
     retry: vi.fn(),
@@ -52,5 +52,15 @@ describe('MacMan continuous chat', () => {
 
     await waitFor(() => expect(client.send).toHaveBeenCalledWith('Continue from where we left off.'))
     expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message MacMan' }).value).toBe('')
+  })
+
+  it('uses the MacMan mark as an accessible thinking state', async () => {
+    const client = fakeClient({ ...readySnapshot, busy: true })
+
+    const { container } = render(<MacManChat client={client} />)
+    const indicator = await screen.findByRole('status', { name: 'MacMan is thinking' })
+
+    expect(indicator.querySelector('img')?.getAttribute('src')).toBe('./macman-mark-transparent.png')
+    expect(container.querySelector('.mm-chat-thinking span')).toBeNull()
   })
 })
