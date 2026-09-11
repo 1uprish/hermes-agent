@@ -48,7 +48,10 @@ export interface MacManConnectionsDependencies {
   getGmailCredentialsPath(): null | string
   getGmailHome(): string
   getIMessageDataDirectory(): string
-  getRememberedAccount(id: MacManConnectionId): null | { displayName: string; externalId: string }
+  getRememberedAccount(
+    id: MacManConnectionId,
+    externalId?: string
+  ): null | { displayName: string; externalId: string }
   rememberAccount(account: { connector: MacManConnectionId; displayName: string; externalId: string }): void
   request(request: BackendRequest): Promise<unknown>
   runConnector(executable: string, args: string[]): Promise<ConnectorRunResult>
@@ -59,6 +62,8 @@ const CAPABILITIES = {
   imessage: ['read', 'search', 'send', 'attachments', 'reactions'],
   whatsapp: ['read', 'search', 'send', 'attachments']
 } as const
+
+const IMESSAGE_VERIFIED_ACCOUNT_ID = 'local-messages:v1'
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
@@ -87,6 +92,20 @@ function connectorFailure(result: ConnectorRunResult, fallback: string): string 
 function requireSuccessful(result: ConnectorRunResult, fallback: string): void {
   if (result.exitCode !== 0) {
     throw new Error(connectorFailure(result, fallback))
+  }
+}
+
+function requireIMessagePermission(
+  result: ConnectorRunResult,
+  permission: 'Automation' | 'Messages Data',
+  missingMessage: string
+): void {
+  requireSuccessful(result, `iMessage ${permission} authorization failed`)
+  const output = `${result.stdout}\n${result.stderr}`
+  const escapedPermission = permission.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+  if (!new RegExp(`^\\s*\\[ok\\]\\s+${escapedPermission}\\b`, 'im').test(output)) {
+    throw new Error(missingMessage)
   }
 }
 
@@ -194,12 +213,12 @@ export function createMacManConnectionsController(dependencies: MacManConnection
       return unavailable('imessage', 'iMessage')
     }
 
-    const remembered = dependencies.getRememberedAccount('imessage')
+    const remembered = dependencies.getRememberedAccount('imessage', IMESSAGE_VERIFIED_ACCOUNT_ID)
 
-    if (!remembered) {
+    if (remembered?.externalId !== IMESSAGE_VERIFIED_ACCOUNT_ID) {
       return {
         capabilities: [...CAPABILITIES.imessage],
-        detail: 'Authorize the bundled Messages connector to read and send iMessages on this Mac.',
+        detail: 'Allow Messages Data for history and Automation for sending.',
         id: 'imessage',
         name: 'iMessage',
         status: 'needs-permission'
@@ -289,16 +308,28 @@ export function createMacManConnectionsController(dependencies: MacManConnection
         throw new Error('The iMessage runtime is missing from this MacMan release')
       }
 
-      const result = await dependencies.runConnector(executable, [
+      const baseArgs = [
         '--data-dir',
-        dependencies.getIMessageDataDirectory(),
-        'authorize'
-      ])
-      requireSuccessful(result, 'iMessage authorization failed')
+        dependencies.getIMessageDataDirectory()
+      ]
+
+      const messagesData = await dependencies.runConnector(executable, [...baseArgs, 'authorize', 'messages-data'])
+      requireIMessagePermission(
+        messagesData,
+        'Messages Data',
+        'MacMan still needs Full Disk Access to read and search your Messages history.'
+      )
+
+      const automation = await dependencies.runConnector(executable, [...baseArgs, 'authorize', 'automation'])
+      requireIMessagePermission(
+        automation,
+        'Automation',
+        'MacMan still needs Automation permission to send through Messages.'
+      )
       dependencies.rememberAccount({
         connector: 'imessage',
         displayName: 'Messages on this Mac',
-        externalId: 'local-messages'
+        externalId: IMESSAGE_VERIFIED_ACCOUNT_ID
       })
     },
 

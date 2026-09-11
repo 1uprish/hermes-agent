@@ -233,15 +233,16 @@ import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
 import { resolveHudWindowing } from './hud-windowing'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
-import type { MacManCuaPermissionService } from './macman-cua-runtime'
+import { resolveMacManBundledRuntime } from './macman-bundled-runtime'
+import { createMacManConnectionStore } from './macman-connection-store'
+import { createMacManConnectionsController } from './macman-connections-controller'
 import {
   macManConnectorBackendEnvironment,
   macManConnectorResourcesRoot,
   resolveMacManConnectorExecutable,
   runMacManConnector
 } from './macman-connector-runtime'
-import { createMacManConnectionStore } from './macman-connection-store'
-import { createMacManConnectionsController } from './macman-connections-controller'
+import type { MacManCuaPermissionService } from './macman-cua-runtime'
 import {
   applicationNameForDistribution,
   readMacManDistribution,
@@ -1811,8 +1812,8 @@ const macManConnectionsController = createMacManConnectionsController({
   getIMessageDataDirectory() {
     return path.join(MACMAN_CONNECTION_DATA_ROOT, 'imessage')
   },
-  getRememberedAccount(id) {
-    return macManConnectionStore.listAccounts(id)[0] ?? null
+  getRememberedAccount(id, externalId) {
+    return macManConnectionStore.listAccounts(id).find(account => !externalId || account.externalId === externalId) ?? null
   },
   rememberAccount(account) {
     macManConnectionStore.upsertAccount(account)
@@ -5178,6 +5179,49 @@ function createActiveBackend(backendArgs) {
 }
 
 function resolveHermesBackend(backendArgs) {
+  // MacMan is a single-product distribution. Its UI and agent protocol ship as
+  // one versioned unit, so a packaged build must never fall through to a
+  // mutable user-installed Hermes checkout. Besides forcing a second install,
+  // that split lets a newer renderer call RPC methods an older backend does not
+  // know. The bundled Python distribution is relocatable and owns both the
+  // source tree and its dependencies inside MacMan.app.
+  if (MACMAN_DISTRIBUTION && IS_PACKAGED) {
+    const runtime = resolveMacManBundledRuntime(process.resourcesPath)
+
+    if (!runtime) {
+      throw new Error('This MacMan release is missing its bundled agent runtime. Reinstall MacMan.')
+    }
+
+    return {
+      kind: 'python',
+      label: 'MacMan bundled agent runtime',
+      command: runtime.python,
+      args: ['-m', 'hermes_cli.main', ...backendArgs],
+      env: {
+        ...buildDesktopBackendEnv({
+          currentEnv: { ...process.env, PYTHONPATH: '' },
+          hermesHome: HERMES_HOME,
+          prependPathEntries: [
+            runtime.pythonRoot + path.sep + 'bin',
+            ...(MACMAN_CONNECTOR_BACKEND_ENV?.pathEntries || [])
+          ],
+          pythonPathEntries: [runtime.sourceRoot, runtime.sitePackages]
+        }),
+        PYTHONHOME: runtime.pythonRoot,
+        PYTHONNOUSERSITE: '1',
+        ...(MACMAN_CONNECTOR_BACKEND_ENV
+          ? {
+              GOG_HOME: MACMAN_CONNECTOR_BACKEND_ENV.GOG_HOME,
+              MACMAN_IMESSAGE_DATA_DIR: MACMAN_CONNECTOR_BACKEND_ENV.MACMAN_IMESSAGE_DATA_DIR
+            }
+          : {})
+      },
+      root: runtime.sourceRoot,
+      bootstrap: false,
+      shell: false
+    }
+  }
+
   // 1. Explicit override -- HERMES_DESKTOP_HERMES_ROOT points at a developer
   //    checkout. Honour it as-is (no bootstrap; the user is driving).
   const overrideRoot = process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT)

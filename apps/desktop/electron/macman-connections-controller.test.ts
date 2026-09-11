@@ -31,8 +31,12 @@ function fakeDependencies(overrides: Record<string, unknown> = {}) {
       getIMessageDataDirectory() {
         return '/user/macman/imessage'
       },
-      getRememberedAccount(id: string) {
-        return rememberedAccounts.find(account => account.connector === id) ?? null
+      getRememberedAccount(id: string, externalId?: string) {
+        return (
+          rememberedAccounts.find(
+            account => account.connector === id && (!externalId || account.externalId === externalId)
+          ) ?? null
+        )
       },
       rememberAccount(account: { connector: string; displayName: string; externalId: string }) {
         rememberedAccounts.push(account)
