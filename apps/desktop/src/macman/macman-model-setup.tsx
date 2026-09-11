@@ -10,6 +10,7 @@ import type {
 
 type MacManModelSetupProps = {
   bridge: MacManNativeBridge
+  initialProviderId?: string
   onClose: () => void
   onConnected: (selection: { model: string; provider: string }) => void
 }
@@ -34,7 +35,7 @@ function providerAction(provider: MacManModelProvider): string {
   return `Open ${provider.name} setup`
 }
 
-export function MacManModelSetup({ bridge, onClose, onConnected }: MacManModelSetupProps) {
+export function MacManModelSetup({ bridge, initialProviderId, onClose, onConnected }: MacManModelSetupProps) {
   const [catalog, setCatalog] = useState<MacManModelCatalog | null>(null)
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null)
   const [keyProviderId, setKeyProviderId] = useState<string | null>(null)
@@ -45,40 +46,8 @@ export function MacManModelSetup({ bridge, onClose, onConnected }: MacManModelSe
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const generation = useRef(0)
+  const initialProviderHandled = useRef(false)
   const pollTimer = useRef<number | null>(null)
-
-  const loadCatalog = useCallback(async () => {
-    const request = ++generation.current
-
-    setBusy(true)
-    setError(null)
-
-    try {
-      const next = await bridge.getModelCatalog()
-
-      if (request === generation.current) {
-        setCatalog(next)
-      }
-    } catch (cause) {
-      if (request === generation.current) {
-        setError(message(cause))
-      }
-    } finally {
-      if (request === generation.current) {
-        setBusy(false)
-      }
-    }
-  }, [bridge])
-
-  useEffect(() => {
-    void loadCatalog()
-
-    return () => {
-      if (pollTimer.current !== null) {
-        window.clearTimeout(pollTimer.current)
-      }
-    }
-  }, [loadCatalog])
 
   const schedulePoll = useCallback(
     (session: MacManModelLoginSession, request: number) => {
@@ -126,7 +95,7 @@ export function MacManModelSetup({ bridge, onClose, onConnected }: MacManModelSe
     [bridge]
   )
 
-  async function chooseProvider(provider: MacManModelProvider) {
+  const chooseProvider = useCallback(async (provider: MacManModelProvider) => {
     setError(null)
 
     if (provider.authenticated) {
@@ -183,7 +152,49 @@ export function MacManModelSetup({ bridge, onClose, onConnected }: MacManModelSe
         setBusy(false)
       }
     }
-  }
+  }, [bridge, schedulePoll])
+
+  const loadCatalog = useCallback(async () => {
+    const request = ++generation.current
+
+    setBusy(true)
+    setError(null)
+
+    try {
+      const next = await bridge.getModelCatalog()
+
+      if (request === generation.current) {
+        setCatalog(next)
+
+        const initialProvider = initialProviderId
+          ? next.providers.find(provider => provider.id === initialProviderId)
+          : undefined
+
+        if (initialProvider && !initialProviderHandled.current) {
+          initialProviderHandled.current = true
+          void chooseProvider(initialProvider)
+        }
+      }
+    } catch (cause) {
+      if (request === generation.current) {
+        setError(message(cause))
+      }
+    } finally {
+      if (request === generation.current) {
+        setBusy(false)
+      }
+    }
+  }, [bridge, chooseProvider, initialProviderId])
+
+  useEffect(() => {
+    void loadCatalog()
+
+    return () => {
+      if (pollTimer.current !== null) {
+        window.clearTimeout(pollTimer.current)
+      }
+    }
+  }, [loadCatalog])
 
   async function saveApiKey() {
     if (!keyProviderId) {

@@ -34,6 +34,7 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
   const requestGeneration = useRef(0)
   const [chatClient] = useState(() => createMacManChatClient(bridge ?? undefined))
   const [modelSetupOpen, setModelSetupOpen] = useState(false)
+  const [modelSetupProviderId, setModelSetupProviderId] = useState<string>()
   const [memorySettings, setMemorySettings] = useState(DEFAULT_MACMAN_MEMORY_SETTINGS)
   const [settingsNotice, setSettingsNotice] = useState<string>()
   const latestModelCatalog = useRef<MacManModelCatalog | undefined>(undefined)
@@ -194,6 +195,11 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
     }))
   }, [])
 
+  const openModelSetup = useCallback((providerId?: string) => {
+    setModelSetupProviderId(providerId)
+    setModelSetupOpen(true)
+  }, [])
+
   const runSettingsAction = useCallback(
     async (action: MacManSettingsAction) => {
       if (!bridge) {
@@ -323,14 +329,14 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
             client={chatClient}
             loadModelCatalog={bridge ? loadModelCatalog : undefined}
             onActiveModelChange={showActiveChatModel}
-            onManageModels={() => setModelSetupOpen(true)}
+            onManageModels={openModelSetup}
             pickAttachments={bridge ? () => bridge.pickChatAttachments() : undefined}
           />
         }
         connections={bridge ? <MacManConnections bridge={bridge} /> : undefined}
         memorySettings={memorySettings}
         onMemorySettingChange={changeMemorySetting}
-        onOpenModelSetup={() => setModelSetupOpen(true)}
+        onOpenModelSetup={() => openModelSetup()}
         onOpenSystemSettings={openSystemSettings}
         onRefresh={refresh}
         onRequestPermission={requestPermission}
@@ -341,7 +347,11 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
       {bridge && modelSetupOpen ? (
         <MacManModelSetup
           bridge={bridge}
-          onClose={() => setModelSetupOpen(false)}
+          initialProviderId={modelSetupProviderId}
+          onClose={() => {
+            setModelSetupOpen(false)
+            setModelSetupProviderId(undefined)
+          }}
           onConnected={selection => {
             showActiveChatModel(selection)
             void chatClient.switchModel(selection.provider, selection.model).catch(error => {

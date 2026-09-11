@@ -1312,15 +1312,23 @@ button:focus-visible {
   color: var(--mm-red);
 }
 
-.mm-chat-activity {
+.mm-chat-workstream {
+  display: grid;
   width: min(520px, 88%);
   margin: -4px 0 24px;
-  padding: 11px 13px;
-  border-radius: 11px;
-  background: var(--mm-fill);
+  padding: 4px 6px;
+  color: color-mix(in srgb, var(--mm-accent) 58%, var(--mm-text-secondary));
+  align-items: center;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 12px;
 }
 
-.mm-chat-activity > strong {
+.mm-chat-activity-copy {
+  min-width: 0;
+}
+
+.mm-chat-activity-copy > strong {
+  display: block;
   color: var(--mm-text-secondary);
   font-size: 9.5px;
   font-weight: 650;
@@ -1328,15 +1336,15 @@ button:focus-visible {
   text-transform: uppercase;
 }
 
-.mm-chat-activity ul {
+.mm-chat-activity-copy ul {
   display: grid;
-  margin: 8px 0 0;
+  margin: 4px 0 0;
   padding: 0;
   gap: 6px;
   list-style: none;
 }
 
-.mm-chat-activity li {
+.mm-chat-activity-copy li {
   display: flex;
   color: var(--mm-text-secondary);
   align-items: center;
@@ -1345,7 +1353,7 @@ button:focus-visible {
   line-height: 1.35;
 }
 
-.mm-chat-activity li > span {
+.mm-chat-activity-copy li > span {
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -1359,6 +1367,41 @@ button:focus-visible {
 
 .mm-chat-activity--failed > span {
   background: var(--mm-red);
+}
+
+.mm-chat-model-connect {
+  display: grid;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--mm-border);
+  background: transparent;
+  color: var(--mm-text);
+  text-align: left;
+  align-items: center;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 9px;
+}
+
+.mm-chat-model-connect > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+}
+
+.mm-chat-model-connect strong {
+  font-size: 10.5px;
+}
+
+.mm-chat-model-connect small,
+.mm-chat-model-connect > span:last-child {
+  color: var(--mm-text-secondary);
+  font-size: 9px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .mm-chat-model-connect:hover {
+    background: var(--mm-fill);
+  }
 }
 
 .mm-chat-input-card {

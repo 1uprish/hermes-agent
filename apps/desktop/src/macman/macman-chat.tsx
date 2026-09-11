@@ -15,7 +15,7 @@ interface MacManChatProps {
   client: MacManChatClient
   loadModelCatalog?: () => Promise<MacManModelCatalog>
   onActiveModelChange?: (model: { model: string; provider: string }) => void
-  onManageModels?: () => void
+  onManageModels?: (providerId?: string) => void
   pickAttachments?: () => Promise<MacManChatAttachment[]>
 }
 
@@ -198,19 +198,6 @@ export function MacManChat({
                 ) : null}
               </article>
             ))}
-            {snapshot.activities?.length ? (
-              <section aria-label="Live activity" className="mm-chat-activity">
-                <strong>Live activity</strong>
-                <ul>
-                  {snapshot.activities.slice(-4).map(activity => (
-                    <li className={`mm-chat-activity--${activity.state}`} key={activity.id}>
-                      <span aria-hidden />
-                      {activity.label}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ) : null}
             {snapshot.pendingInput ? (
               <MacManInputCard
                 input={snapshot.pendingInput}
@@ -218,7 +205,29 @@ export function MacManChat({
                 onRespond={value => void client.respondToInput(value)}
               />
             ) : null}
-            {snapshot.busy ? <MacManThinkingMark /> : null}
+            {snapshot.busy ? (
+              <section aria-label="Live activity" className="mm-chat-workstream">
+                <MacManThinkingMark />
+                <div className="mm-chat-activity-copy">
+                  <strong>Live activity</strong>
+                  <ul>
+                    {snapshot.activities?.length ? (
+                      snapshot.activities.slice(-4).map(activity => (
+                        <li className={`mm-chat-activity--${activity.state}`} key={activity.id}>
+                          <span aria-hidden />
+                          {activity.label}
+                        </li>
+                      ))
+                    ) : (
+                      <li className="mm-chat-activity--running">
+                        <span aria-hidden />
+                        Working on it
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              </section>
+            ) : null}
           </div>
         )}
       </div>

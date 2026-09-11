@@ -13,7 +13,7 @@ interface MacManModelSelectorProps {
   busy: boolean
   limitedModels?: Record<string, MacManModelLimit>
   loadCatalog: () => Promise<MacManModelCatalog>
-  onManageModels?: () => void
+  onManageModels?: (providerId?: string) => void
   onSelectModel: (provider: string, model: string, confirmExpensiveModel?: boolean) => Promise<MacManModelSwitchResult>
 }
 
@@ -131,6 +131,11 @@ export function MacManModelSelector({
   }
 
   const connectedProviders = catalog?.providers.filter(provider => provider.authenticated && provider.models.length > 0) ?? []
+
+  const chatGptProvider = catalog?.providers.find(
+    provider => provider.id === 'openai-codex' && !provider.authenticated && provider.setup === 'oauth'
+  )
+
   const activeLimit = activeModel ? limitedModels[limitKey(activeModel.provider, activeModel.model)] : undefined
 
   return (
@@ -157,7 +162,7 @@ export function MacManModelSelector({
           <header className="mm-chat-model-popover-header">
             <span>
               <strong>Models</strong>
-              <small>Connected accounts only</small>
+              <small>Models and accounts</small>
             </span>
             <button aria-label="Refresh models" disabled={loading} onClick={() => void refresh()} type="button">
               <IconRefresh aria-hidden className={loading ? 'mm-spin' : undefined} size={15} stroke={1.8} />
@@ -193,6 +198,24 @@ export function MacManModelSelector({
             {loading && !catalog ? <p className="mm-chat-model-placeholder">Checking connected models…</p> : null}
             {!loading && catalog && connectedProviders.length === 0 ? (
               <p className="mm-chat-model-placeholder">No model provider is connected yet.</p>
+            ) : null}
+            {chatGptProvider && onManageModels ? (
+              <button
+                aria-label="Sign in with ChatGPT"
+                className="mm-chat-model-connect"
+                onClick={() => {
+                  setOpen(false)
+                  onManageModels(chatGptProvider.id)
+                }}
+                type="button"
+              >
+                <span aria-hidden className="mm-provider-glyph">C</span>
+                <span>
+                  <strong>ChatGPT</strong>
+                  <small>Use your subscription · no API key</small>
+                </span>
+                <span>Sign in</span>
+              </button>
             ) : null}
             {connectedProviders.map(provider => (
               <section className="mm-chat-model-group" key={provider.id}>

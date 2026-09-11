@@ -65,6 +65,7 @@ describe('MacMan continuous chat', () => {
 
   it('picks, previews, removes, and sends MacMan-owned attachments', async () => {
     const client = fakeClient()
+
     const pickAttachments = vi.fn().mockResolvedValue([
       { kind: 'pdf', name: 'launch.pdf', path: '/tmp/launch.pdf' },
       { kind: 'image', name: 'design.png', path: '/tmp/design.png' }
@@ -235,6 +236,7 @@ describe('MacMan continuous chat', () => {
   it('offers ChatGPT sign-in directly from the composer model selector', async () => {
     const client = fakeClient(readySnapshot)
     const onManageModels = vi.fn()
+
     const loadModelCatalog = vi.fn().mockResolvedValue({
       connected: true,
       current: { model: 'deepseek-v4-pro', provider: 'deepseek' },
