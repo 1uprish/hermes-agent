@@ -52,6 +52,7 @@ export interface MacManConnectionsDependencies {
     id: MacManConnectionId,
     externalId?: string
   ): null | { displayName: string; externalId: string }
+  openSystemSettings(permission: 'automation' | 'fullDiskAccess'): Promise<void>
   rememberAccount(account: { connector: MacManConnectionId; displayName: string; externalId: string }): void
   request(request: BackendRequest): Promise<unknown>
   runConnector(executable: string, args: string[]): Promise<ConnectorRunResult>
@@ -314,18 +315,28 @@ export function createMacManConnectionsController(dependencies: MacManConnection
       ]
 
       const messagesData = await dependencies.runConnector(executable, [...baseArgs, 'authorize', 'messages-data'])
-      requireIMessagePermission(
-        messagesData,
-        'Messages Data',
-        'MacMan still needs Full Disk Access to read and search your Messages history.'
-      )
+      try {
+        requireIMessagePermission(
+          messagesData,
+          'Messages Data',
+          'MacMan still needs Full Disk Access to read and search your Messages history.'
+        )
+      } catch (error) {
+        await dependencies.openSystemSettings('fullDiskAccess')
+        throw error
+      }
 
       const automation = await dependencies.runConnector(executable, [...baseArgs, 'authorize', 'automation'])
-      requireIMessagePermission(
-        automation,
-        'Automation',
-        'MacMan still needs Automation permission to send through Messages.'
-      )
+      try {
+        requireIMessagePermission(
+          automation,
+          'Automation',
+          'MacMan still needs Automation permission to send through Messages.'
+        )
+      } catch (error) {
+        await dependencies.openSystemSettings('automation')
+        throw error
+      }
       dependencies.rememberAccount({
         connector: 'imessage',
         displayName: 'Messages on this Mac',

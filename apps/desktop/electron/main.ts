@@ -1815,6 +1815,9 @@ const macManConnectionsController = createMacManConnectionsController({
   getRememberedAccount(id, externalId) {
     return macManConnectionStore.listAccounts(id).find(account => !externalId || account.externalId === externalId) ?? null
   },
+  openSystemSettings(permission) {
+    return macManNativeBridgeController.openSystemSettings(permission)
+  },
   rememberAccount(account) {
     macManConnectionStore.upsertAccount(account)
   },
