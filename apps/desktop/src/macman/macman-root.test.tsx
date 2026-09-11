@@ -37,6 +37,7 @@ function bridge(overrides: Partial<MacManNativeBridge> = {}): MacManNativeBridge
     openLogs: vi.fn().mockResolvedValue({ ok: true }),
     openModelProviderSetup: vi.fn(),
     openSystemSettings: vi.fn(),
+    pickChatAttachments: vi.fn().mockResolvedValue([]),
     pickExcludedPaths: vi.fn().mockResolvedValue([]),
     pollModelLogin: vi.fn(),
     pollWhatsAppConnection: vi.fn(),

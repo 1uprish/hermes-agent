@@ -324,6 +324,7 @@ export function MacManRoot({ bridge = window.macManNative ?? null }: MacManRootP
             loadModelCatalog={bridge ? loadModelCatalog : undefined}
             onActiveModelChange={showActiveChatModel}
             onManageModels={() => setModelSetupOpen(true)}
+            pickAttachments={bridge ? () => bridge.pickChatAttachments() : undefined}
           />
         }
         connections={bridge ? <MacManConnections bridge={bridge} /> : undefined}

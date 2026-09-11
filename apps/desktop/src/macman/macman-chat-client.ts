@@ -3,11 +3,18 @@ import type { MacManChatConnection, MacManFreshChatConnection } from './native-c
 const MACMAN_CHAT_TITLE = 'MacMan Chat'
 
 export interface MacManChatMessage {
+  attachments?: MacManChatAttachment[]
   dispatch?: MacManDispatchReceipt
   id: string
   role: 'assistant' | 'user'
   taskId?: string
   text: string
+}
+
+export interface MacManChatAttachment {
+  kind: 'file' | 'image' | 'pdf'
+  name: string
+  path: string
 }
 
 export type MacManDispatchRoute = 'foreground' | 'parallel' | 'queue' | 'redirect' | 'steer'
@@ -72,7 +79,7 @@ export interface MacManChatClient {
   interrupt(): Promise<void>
   retry(): Promise<void>
   respondToInput(value: string): Promise<void>
-  send(text: string): Promise<void>
+  send(text: string, attachments?: MacManChatAttachment[]): Promise<void>
   subscribe(listener: (snapshot: MacManChatSnapshot) => void): () => void
   switchModel(provider: string, model: string, confirmExpensiveModel?: boolean): Promise<MacManModelSwitchResult>
 }
@@ -105,8 +112,11 @@ type PendingRequest = {
 }
 
 interface PendingDispatch {
+  attachments?: MacManChatAttachment[]
   clientMessageId: string
+  displayText: string
   localMessageId: string
+  requestedRoute?: MacManDispatchRoute
   text: string
 }
 
@@ -614,17 +624,38 @@ class MacManChatGatewayClient implements MacManChatClient {
     }
   }
 
-  async send(text: string): Promise<void> {
+  async send(text: string, attachments: MacManChatAttachment[] = []): Promise<void> {
     const prompt = text.trim()
 
-    if (!prompt || !this.gateway || !this.runtimeSessionId || this.state.status !== 'ready') {
+    if ((!prompt && attachments.length === 0) || !this.gateway || !this.runtimeSessionId || this.state.status !== 'ready') {
       return
     }
 
     const wasBusy = this.state.busy
+    let attachmentContext: string[] = []
+
+    try {
+      attachmentContext = await this.stageAttachments(attachments)
+    } catch (error) {
+      this.publish({ ...this.state, error: errorMessage(error) })
+
+      return
+    }
+
+    const dispatchText = [prompt, attachmentContext.join('\n')].filter(Boolean).join('\n\n')
+    const displayText = prompt || `Attached ${attachments.map(attachment => attachment.name).join(', ')}`
     const clientMessageId = `macman-${crypto.randomUUID()}`
     const localMessageId = `user-${clientMessageId}`
-    const pending = { clientMessageId, localMessageId, text: prompt }
+
+    const pending: PendingDispatch = {
+      attachments: attachments.length ? attachments : undefined,
+      clientMessageId,
+      displayText,
+      localMessageId,
+      requestedRoute: attachments.length ? 'queue' : undefined,
+      text: dispatchText
+    }
+
     this.pendingDispatches.set(clientMessageId, pending)
     this.publish({
       ...this.state,
@@ -634,9 +665,10 @@ class MacManChatGatewayClient implements MacManChatClient {
         ...this.state.messages,
         {
           dispatch: { clientMessageId, route: 'routing', state: 'routing' },
+          attachments: pending.attachments,
           id: localMessageId,
           role: 'user',
-          text: prompt
+          text: displayText
         }
       ]
     })
@@ -661,6 +693,7 @@ class MacManChatGatewayClient implements MacManChatClient {
         task_id?: string
       }>('prompt.dispatch', {
         client_message_id: pending.clientMessageId,
+        ...(pending.requestedRoute ? { requested_route: pending.requestedRoute } : {}),
         session_id: runtimeSessionId,
         text: pending.text
       })
@@ -693,6 +726,78 @@ class MacManChatGatewayClient implements MacManChatClient {
     listener(this.state)
 
     return () => this.listeners.delete(listener)
+  }
+
+  private async stageAttachments(attachments: MacManChatAttachment[]): Promise<string[]> {
+    if (!attachments.length) {
+      return []
+    }
+
+    if (!this.gateway || !this.runtimeSessionId) {
+      throw new Error('MacMan chat is not connected.')
+    }
+
+    const stagedImagePaths: string[] = []
+    const context: string[] = []
+
+    try {
+      for (const attachment of attachments.slice(0, 10)) {
+        const name = attachment.name.trim()
+        const filePath = attachment.path.trim()
+
+        if (!name || !filePath) {
+          throw new Error('MacMan received an invalid attachment.')
+        }
+
+        if (attachment.kind === 'image') {
+          const result = await this.gateway.request<{ path?: string; text?: string }>('image.attach', {
+            path: filePath,
+            session_id: this.runtimeSessionId
+          })
+
+          if (result.path) {
+            stagedImagePaths.push(result.path)
+          }
+
+          context.push(result.text?.trim() || `[User attached image: ${name}]`)
+        } else if (attachment.kind === 'pdf') {
+          const result = await this.gateway.request<{
+            pages?: Array<{ path?: string }>
+            text?: string
+          }>('pdf.attach', {
+            path: filePath,
+            session_id: this.runtimeSessionId
+          })
+
+          result.pages?.forEach(page => {
+            if (page.path) {
+              stagedImagePaths.push(page.path)
+            }
+          })
+          context.push(result.text?.trim() || `[User attached PDF: ${name}]`)
+        } else {
+          const result = await this.gateway.request<{ ref_text?: string }>('file.attach', {
+            name,
+            path: filePath,
+            session_id: this.runtimeSessionId
+          })
+
+          if (!result.ref_text?.trim()) {
+            throw new Error(`MacMan could not attach ${name}.`)
+          }
+
+          context.push(result.ref_text.trim())
+        }
+      }
+    } catch (error) {
+      await Promise.allSettled(stagedImagePaths.map(path => this.gateway?.request('image.detach', {
+        path,
+        session_id: this.runtimeSessionId
+      })))
+      throw error
+    }
+
+    return context
   }
 
   async switchModel(
@@ -1010,13 +1115,14 @@ class MacManChatGatewayClient implements MacManChatClient {
       const hydratedMessages = hydrateLiveMessages(session)
 
       const pendingMessages = [...this.pendingDispatches.values()].flatMap(pending =>
-        hydratedMessages.some(message => message.role === 'user' && message.text === pending.text)
+        hydratedMessages.some(message => message.role === 'user' && message.text === pending.displayText)
           ? []
           : [{
               dispatch: { clientMessageId: pending.clientMessageId, route: 'routing', state: 'routing' } as MacManDispatchReceipt,
+              attachments: pending.attachments,
               id: pending.localMessageId,
               role: 'user' as const,
-              text: pending.text
+              text: pending.displayText
             }]
       )
 

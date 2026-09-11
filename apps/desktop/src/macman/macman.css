@@ -1272,6 +1272,34 @@ button:focus-visible {
   background: color-mix(in srgb, var(--mm-accent) 14%, var(--mm-card));
 }
 
+.mm-chat-message-attachments,
+.mm-chat-attachments {
+  display: flex;
+  margin: 7px 0 0;
+  padding: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+}
+
+.mm-chat-message-attachments {
+  justify-content: flex-end;
+}
+
+.mm-chat-message-attachments li,
+.mm-chat-attachments li {
+  max-width: 210px;
+  padding: 4px 8px;
+  overflow: hidden;
+  border: 1px solid var(--mm-border);
+  border-radius: 7px;
+  background: var(--mm-fill);
+  color: var(--mm-text-secondary);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .mm-chat-route {
   display: block;
   margin-top: 6px;
@@ -1517,6 +1545,49 @@ button:focus-visible {
   line-height: 1.5;
 }
 
+.mm-chat-attachments {
+  margin: 0;
+}
+
+.mm-chat-attachments li {
+  display: inline-flex;
+  height: 27px;
+  padding: 0 4px 0 8px;
+  align-items: center;
+  gap: 4px;
+}
+
+.mm-chat-attachments li > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mm-chat-attachments button,
+.mm-chat-attach {
+  display: inline-grid;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--mm-text-secondary);
+  place-items: center;
+}
+
+.mm-chat-attachments button {
+  width: 20px;
+  height: 20px;
+}
+
+.mm-chat-attach {
+  width: 30px;
+  height: 30px;
+}
+
+.mm-chat-attachments button:hover,
+.mm-chat-attach:hover:not(:disabled) {
+  background: var(--mm-fill-hover);
+  color: var(--mm-text);
+}
+
 .mm-chat-composer-actions {
   display: flex;
   width: 100%;
@@ -1524,6 +1595,13 @@ button:focus-visible {
   align-items: flex-end;
   justify-content: space-between;
   gap: 10px;
+}
+
+.mm-chat-composer-leading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
 }
 
 .mm-chat-model-selector {

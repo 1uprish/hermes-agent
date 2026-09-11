@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('macManNative', {
   openLogs: () => ipcRenderer.invoke('hermes:logs:reveal'),
   openModelProviderSetup: providerId => ipcRenderer.invoke('macman:model:open-provider-setup', providerId),
   openSystemSettings: permission => ipcRenderer.invoke('macman:native:open-system-settings', permission),
+  pickChatAttachments: () => ipcRenderer.invoke('macman:chat:pick-attachments'),
   pickExcludedPaths: () => ipcRenderer.invoke('macman:pick-exclusions'),
   pollModelLogin: (providerId, sessionId) => ipcRenderer.invoke('macman:model:poll-login', providerId, sessionId),
   pollWhatsAppConnection: pairingId => ipcRenderer.invoke('macman:connections:whatsapp:poll', pairingId),

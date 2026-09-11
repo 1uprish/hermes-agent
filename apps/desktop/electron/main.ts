@@ -16547,6 +16547,35 @@ ipcMain.handle('macman:pick-exclusions', async () => {
   return result.canceled ? [] : result.filePaths
 })
 
+ipcMain.handle('macman:chat:pick-attachments', async () => {
+  assertMacManDistribution()
+
+  const result = await dialog.showOpenDialog(mainWindow, {
+    filters: [
+      { extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'pdf', 'txt', 'md', 'csv', 'json'], name: 'Supported files' },
+      { extensions: ['*'], name: 'All files' }
+    ],
+    properties: ['openFile', 'multiSelections'],
+    title: 'Attach files to MacMan'
+  })
+
+  if (result.canceled) {
+    return []
+  }
+
+  const imageExtensions = new Set(['.gif', '.heic', '.jpeg', '.jpg', '.png', '.webp'])
+
+  return result.filePaths.slice(0, 10).map(filePath => {
+    const extension = path.extname(filePath).toLowerCase()
+
+    return {
+      kind: extension === '.pdf' ? 'pdf' : imageExtensions.has(extension) ? 'image' : 'file',
+      name: path.basename(filePath),
+      path: filePath
+    }
+  })
+})
+
 ipcMain.handle('macman:data:export', async (_event, value) => {
   assertMacManDistribution()
 

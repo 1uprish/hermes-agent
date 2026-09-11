@@ -1,7 +1,12 @@
-import { IconArrowUp, IconPlayerStop, IconRefresh } from '@tabler/icons-react'
+import { IconArrowUp, IconPaperclip, IconPlayerStop, IconRefresh, IconX } from '@tabler/icons-react'
 import { useEffect, useRef, useState } from 'react'
 
-import type { MacManChatClient, MacManChatSnapshot, MacManPendingInput } from './macman-chat-client'
+import type {
+  MacManChatAttachment,
+  MacManChatClient,
+  MacManChatSnapshot,
+  MacManPendingInput
+} from './macman-chat-client'
 import { MacManModelSelector } from './macman-model-selector'
 import { MacManThinkingMark } from './macman-thinking-mark'
 import type { MacManModelCatalog } from './native-contract'
@@ -11,6 +16,7 @@ interface MacManChatProps {
   loadModelCatalog?: () => Promise<MacManModelCatalog>
   onActiveModelChange?: (model: { model: string; provider: string }) => void
   onManageModels?: () => void
+  pickAttachments?: () => Promise<MacManChatAttachment[]>
 }
 
 const DISPATCH_LABELS = {
@@ -75,7 +81,15 @@ function MacManInputCard({ input, onRespond }: { input: MacManPendingInput; onRe
   )
 }
 
-export function MacManChat({ client, loadModelCatalog, onActiveModelChange, onManageModels }: MacManChatProps) {
+export function MacManChat({
+  client,
+  loadModelCatalog,
+  onActiveModelChange,
+  onManageModels,
+  pickAttachments
+}: MacManChatProps) {
+  const [attachments, setAttachments] = useState<MacManChatAttachment[]>([])
+  const [attachmentError, setAttachmentError] = useState<string>()
   const [draft, setDraft] = useState('')
   const [snapshot, setSnapshot] = useState<MacManChatSnapshot>(() => client.getSnapshot())
   const transcriptRef = useRef<HTMLDivElement>(null)
@@ -113,12 +127,15 @@ export function MacManChat({ client, loadModelCatalog, onActiveModelChange, onMa
   const submit = () => {
     const message = draft.trim()
 
-    if (!message || snapshot.status !== 'ready') {
+    if ((!message && attachments.length === 0) || snapshot.status !== 'ready') {
       return
     }
 
     setDraft('')
-    void client.send(message)
+    const selectedAttachments = attachments
+    setAttachments([])
+    setAttachmentError(undefined)
+    void (selectedAttachments.length ? client.send(message, selectedAttachments) : client.send(message))
   }
 
   return (
@@ -169,6 +186,11 @@ export function MacManChat({ client, loadModelCatalog, onActiveModelChange, onMa
               <article className={`mm-chat-message mm-chat-message--${message.role}`} key={message.id}>
                 <span>{message.role === 'user' ? 'You' : 'MacMan'}</span>
                 <p>{message.text}</p>
+                {message.attachments?.length ? (
+                  <ul aria-label="Message attachments" className="mm-chat-message-attachments">
+                    {message.attachments.map(attachment => <li key={attachment.path}>{attachment.name}</li>)}
+                  </ul>
+                ) : null}
                 {message.dispatch ? (
                   <small className={`mm-chat-route mm-chat-route--${message.dispatch.state}`}>
                     {message.dispatch.state === 'failed' ? 'Could not route' : DISPATCH_LABELS[message.dispatch.route]}
@@ -202,12 +224,29 @@ export function MacManChat({ client, loadModelCatalog, onActiveModelChange, onMa
       </div>
 
       <div className="mm-chat-composer-wrap">
+        {attachmentError ? <p className="mm-chat-error" role="status">{attachmentError}</p> : null}
         {snapshot.error && snapshot.messages.length > 0 ? (
           <p className="mm-chat-error" role="status">
             {snapshot.error}
           </p>
         ) : null}
         <div className="mm-chat-composer">
+          {attachments.length ? (
+            <ul aria-label="Selected attachments" className="mm-chat-attachments">
+              {attachments.map(attachment => (
+                <li key={attachment.path}>
+                  <span>{attachment.name}</span>
+                  <button
+                    aria-label={`Remove ${attachment.name}`}
+                    onClick={() => setAttachments(current => current.filter(item => item.path !== attachment.path))}
+                    type="button"
+                  >
+                    <IconX aria-hidden size={12} stroke={2} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <textarea
             aria-label="Message MacMan"
             disabled={snapshot.status !== 'ready'}
@@ -223,24 +262,46 @@ export function MacManChat({ client, loadModelCatalog, onActiveModelChange, onMa
             value={draft}
           />
           <div className="mm-chat-composer-actions">
-            {loadModelCatalog ? (
-              <MacManModelSelector
-                activeModel={snapshot.activeModel}
-                busy={snapshot.busy || snapshot.status !== 'ready'}
-                limitedModels={snapshot.limitedModels}
-                loadCatalog={loadModelCatalog}
-                onManageModels={onManageModels}
-                onSelectModel={(provider, model, confirm) =>
-                  confirm ? client.switchModel(provider, model, true) : client.switchModel(provider, model)
-                }
-              />
-            ) : (
-              <span />
-            )}
+            <div className="mm-chat-composer-leading">
+              {pickAttachments ? (
+                <button
+                  aria-label="Attach files"
+                  className="mm-chat-attach"
+                  disabled={snapshot.status !== 'ready'}
+                  onClick={() => {
+                    void pickAttachments()
+                      .then(picked => {
+                        setAttachments(current => {
+                          const byPath = new Map([...current, ...picked].map(item => [item.path, item]))
+
+                          return [...byPath.values()].slice(0, 10)
+                        })
+                        setAttachmentError(undefined)
+                      })
+                      .catch(error => setAttachmentError(error instanceof Error ? error.message : String(error)))
+                  }}
+                  type="button"
+                >
+                  <IconPaperclip aria-hidden size={15} stroke={1.9} />
+                </button>
+              ) : null}
+              {loadModelCatalog ? (
+                <MacManModelSelector
+                  activeModel={snapshot.activeModel}
+                  busy={snapshot.busy || snapshot.status !== 'ready'}
+                  limitedModels={snapshot.limitedModels}
+                  loadCatalog={loadModelCatalog}
+                  onManageModels={onManageModels}
+                  onSelectModel={(provider, model, confirm) =>
+                    confirm ? client.switchModel(provider, model, true) : client.switchModel(provider, model)
+                  }
+                />
+              ) : null}
+            </div>
             <button
               aria-label="Send message"
               className="mm-chat-send"
-              disabled={!draft.trim() || snapshot.status !== 'ready'}
+              disabled={(!draft.trim() && attachments.length === 0) || snapshot.status !== 'ready'}
               onClick={submit}
               type="button"
             >

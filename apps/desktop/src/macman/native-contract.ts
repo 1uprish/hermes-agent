@@ -64,6 +64,12 @@ export type MacManChatConnection = {
 
 export type MacManFreshChatConnection = string | { error?: string; ok: boolean; wsUrl?: string }
 
+export type MacManPickedAttachment = {
+  kind: 'file' | 'image' | 'pdf'
+  name: string
+  path: string
+}
+
 export type MacManConnectionId = 'gmail' | 'imessage' | 'whatsapp'
 
 export type MacManConnectionStatus =
@@ -113,6 +119,7 @@ export type MacManNativeBridge = {
   openLogs(): Promise<{ error?: string; ok: boolean; path?: string }>
   openModelProviderSetup(providerId: string): Promise<{ copiedCommand: boolean; openedUrl: boolean }>
   openSystemSettings(permission: MacManPermissionId): Promise<void>
+  pickChatAttachments(): Promise<MacManPickedAttachment[]>
   pickExcludedPaths(): Promise<string[]>
   pollModelLogin(providerId: string, sessionId: string): Promise<MacManModelLoginResult>
   pollWhatsAppConnection(pairingId: string): Promise<MacManWhatsAppSetup>
