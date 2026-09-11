@@ -40,6 +40,7 @@ type ConnectionsBridge = Pick<
   | 'authorizeIMessage'
   | 'cancelWhatsAppConnection'
   | 'connectGmail'
+  | 'disconnectIMessage'
   | 'getConnectionCatalog'
   | 'pollWhatsAppConnection'
   | 'startWhatsAppConnection'
@@ -51,6 +52,7 @@ function bridge(overrides: Partial<ConnectionsBridge> = {}): ConnectionsBridge {
     authorizeIMessage: vi.fn(),
     cancelWhatsAppConnection: vi.fn(),
     connectGmail: vi.fn(),
+    disconnectIMessage: vi.fn(),
     getConnectionCatalog: vi.fn().mockResolvedValue(catalog),
     pollWhatsAppConnection: vi.fn(),
     startWhatsAppConnection: vi.fn(),
@@ -128,6 +130,37 @@ describe('MacMan first-class connections', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Set up iMessage' }))
 
     await waitFor(() => expect(native.authorizeIMessage).toHaveBeenCalledOnce())
+  })
+
+  it('disconnects a connected iMessage account and refreshes the authoritative state', async () => {
+    const connectedCatalog: MacManConnectionCatalog = {
+      connections: catalog.connections.map(connection =>
+        connection.id === 'imessage'
+          ? { ...connection, account: 'Messages on this Mac', detail: 'Authorized on this Mac.', status: 'connected' }
+          : connection
+      )
+    }
+    const disconnectedCatalog: MacManConnectionCatalog = {
+      connections: connectedCatalog.connections.map(connection =>
+        connection.id === 'imessage'
+          ? {
+              ...connection,
+              account: undefined,
+              detail: 'Disconnected from MacMan. macOS permissions are unchanged.',
+              status: 'ready'
+            }
+          : connection
+      )
+    }
+    const native = bridge({
+      getConnectionCatalog: vi.fn().mockResolvedValueOnce(connectedCatalog).mockResolvedValue(disconnectedCatalog)
+    })
+
+    render(<MacManConnections bridge={native} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Disconnect iMessage' }))
+
+    await waitFor(() => expect(native.disconnectIMessage).toHaveBeenCalledOnce())
+    expect(await screen.findByRole('button', { name: 'Set up iMessage' })).toBeTruthy()
   })
 
   it('collects the Gmail identity before opening least-privilege Google sign-in', async () => {

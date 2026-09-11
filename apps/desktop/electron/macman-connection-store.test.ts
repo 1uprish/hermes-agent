@@ -103,6 +103,26 @@ test('connected account receipts survive an app restart without exposing connect
   reopened.close()
 })
 
+test('connection enablement can be disconnected and reconnected without deleting account data', () => {
+  const databasePath = temporaryDatabase()
+  const store = createMacManConnectionStore({ databasePath })
+
+  store.upsertAccount({ connector: 'imessage', displayName: 'Messages on this Mac', externalId: 'local-messages:v1' })
+  assert.equal(store.getConnectionEnabled('imessage'), undefined)
+
+  store.setConnectionEnabled('imessage', false)
+  assert.equal(store.getConnectionEnabled('imessage'), false)
+  assert.equal(store.listAccounts('imessage').length, 1)
+  store.close()
+
+  const reopened = createMacManConnectionStore({ databasePath })
+  assert.equal(reopened.getConnectionEnabled('imessage'), false)
+  reopened.setConnectionEnabled('imessage', true)
+  assert.equal(reopened.getConnectionEnabled('imessage'), true)
+  assert.equal(reopened.listAccounts('imessage').length, 1)
+  reopened.close()
+})
+
 test('an idempotency key can enqueue exactly one outbound action', () => {
   const store = createMacManConnectionStore({ databasePath: temporaryDatabase() })
   const request = {

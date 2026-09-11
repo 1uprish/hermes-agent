@@ -13,10 +13,12 @@ function fakeDependencies(overrides: Record<string, unknown> = {}) {
     imessage: '/bundle/imessage-cli',
     whatsapp: '/bundle/bridge.js'
   }
+  const connectionStates: Record<string, boolean | undefined> = {}
   const rememberedAccounts: Array<{ connector: string; displayName: string; externalId: string }> = []
 
   return {
     backendRequests,
+    connectionStates,
     openedSettings,
     rememberedAccounts,
     runs,
@@ -32,6 +34,12 @@ function fakeDependencies(overrides: Record<string, unknown> = {}) {
       },
       getIMessageDataDirectory() {
         return '/user/macman/imessage'
+      },
+      getConnectionEnabled(id: string) {
+        return connectionStates[id]
+      },
+      async hasMessagesDatabaseAccess() {
+        return true
       },
       getRememberedAccount(id: string, externalId?: string) {
         return (
@@ -96,6 +104,9 @@ function fakeDependencies(overrides: Record<string, unknown> = {}) {
 
         return { exitCode: 0, stderr: '', stdout: '{}' }
       },
+      setConnectionEnabled(id: string, enabled: boolean) {
+        connectionStates[id] = enabled
+      },
       ...overrides
     }
   }
@@ -142,6 +153,7 @@ test('successful iMessage authorization creates a durable connection receipt use
   assert.deepEqual(fake.rememberedAccounts, [
     { connector: 'imessage', displayName: 'Messages on this Mac', externalId: 'local-messages:v1' }
   ])
+  assert.equal(fake.connectionStates.imessage, true)
   assert.deepEqual((await controller.catalog()).connections[1], {
     account: 'Messages on this Mac',
     capabilities: ['read', 'search', 'send', 'attachments', 'reactions'],
@@ -318,4 +330,38 @@ test('successful iMessage setup recognizes a verified receipt beside a legacy re
   await controller.authorizeIMessage()
 
   assert.equal((await controller.catalog()).connections[1]?.status, 'connected')
+})
+
+test('iMessage catalog does not trust a receipt after Full Disk Access is revoked', async () => {
+  const fake = fakeDependencies({ hasMessagesDatabaseAccess: async () => false })
+  fake.rememberedAccounts.push({
+    connector: 'imessage',
+    displayName: 'Messages on this Mac',
+    externalId: 'local-messages:v1'
+  })
+  const controller = createMacManConnectionsController(fake.dependencies)
+
+  assert.equal((await controller.catalog()).connections[1]?.status, 'needs-permission')
+})
+
+test('disconnecting iMessage persists an off switch without removing its receipt or macOS permissions', async () => {
+  const fake = fakeDependencies()
+  fake.rememberedAccounts.push({
+    connector: 'imessage',
+    displayName: 'Messages on this Mac',
+    externalId: 'local-messages:v1'
+  })
+  const controller = createMacManConnectionsController(fake.dependencies)
+
+  await controller.disconnectIMessage()
+
+  assert.equal(fake.connectionStates.imessage, false)
+  assert.equal(fake.rememberedAccounts.length, 1)
+  assert.deepEqual((await controller.catalog()).connections[1], {
+    capabilities: ['read', 'search', 'send', 'attachments', 'reactions'],
+    detail: 'Disconnected from MacMan. macOS permissions are unchanged.',
+    id: 'imessage',
+    name: 'iMessage',
+    status: 'ready'
+  })
 })
