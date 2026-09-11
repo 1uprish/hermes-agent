@@ -97,6 +97,30 @@ describe('MacMan-owned model setup', () => {
     expect(await screen.findByRole('button', { name: 'Use gpt-5.5' })).toBeTruthy()
   })
 
+  it('starts ChatGPT login immediately when opened from the composer selector', async () => {
+    const native = bridge({
+      startModelLogin: vi.fn().mockResolvedValue({
+        expiresInSeconds: 900,
+        pollIntervalMs: 10_000,
+        providerId: 'openai-codex',
+        sessionId: 'codex-session',
+        userCode: 'DIRECT-CODE'
+      })
+    })
+
+    render(
+      <MacManModelSetup
+        bridge={native}
+        initialProviderId="openai-codex"
+        onClose={vi.fn()}
+        onConnected={vi.fn()}
+      />
+    )
+
+    expect(await screen.findByText('DIRECT-CODE')).toBeTruthy()
+    expect(native.startModelLogin).toHaveBeenCalledWith('openai-codex')
+  })
+
   it('saves an API key without exposing it after submission, then offers that provider models', async () => {
     const authenticated = {
       ...catalog,

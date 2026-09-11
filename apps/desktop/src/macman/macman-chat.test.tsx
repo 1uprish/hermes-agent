@@ -97,6 +97,8 @@ describe('MacMan continuous chat', () => {
 
     expect(indicator.querySelector('img')?.getAttribute('src')).toBe('./macman-mark-transparent.png')
     expect(container.querySelector('.mm-chat-thinking span')).toBeNull()
+    expect(indicator.closest('.mm-chat-workstream')).toBeTruthy()
+    expect(screen.getByText('Working on it')).toBeTruthy()
   })
 
   it('keeps the composer usable while working and shows how a follow-up was routed', async () => {
@@ -138,9 +140,27 @@ describe('MacMan continuous chat', () => {
 
     render(<MacManChat client={client} />)
 
-    expect(await screen.findByRole('region', { name: 'Live activity' })).toBeTruthy()
+    const activity = await screen.findByRole('region', { name: 'Live activity' })
+    const indicator = screen.getByRole('status', { name: 'MacMan is thinking' })
+
+    expect(activity.querySelector('.mm-chat-activity-copy')).toBeTruthy()
+    expect(activity.contains(indicator)).toBe(true)
     expect(screen.getByText('Opening the signed-in browser')).toBeTruthy()
     expect(screen.getByText('Checking the page')).toBeTruthy()
+  })
+
+  it('removes live activity with the thinking animation when work finishes', async () => {
+    const client = fakeClient({
+      ...readySnapshot,
+      activities: [{ id: 'status-1', kind: 'status', label: 'Finished checking the page', state: 'complete' }],
+      busy: false
+    })
+
+    render(<MacManChat client={client} />)
+
+    expect(await screen.findByText('I will keep this chat together.')).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Live activity' })).toBeNull()
+    expect(screen.queryByRole('status', { name: 'MacMan is thinking' })).toBeNull()
   })
 
   it('offers a stop action and an inline approval decision while work is blocked', async () => {
@@ -210,6 +230,40 @@ describe('MacMan continuous chat', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use deepseek-v4-pro' }))
 
     await waitFor(() => expect(client.switchModel).toHaveBeenCalledWith('deepseek', 'deepseek-v4-pro'))
+  })
+
+  it('offers ChatGPT sign-in directly from the composer model selector', async () => {
+    const client = fakeClient(readySnapshot)
+    const onManageModels = vi.fn()
+    const loadModelCatalog = vi.fn().mockResolvedValue({
+      connected: true,
+      current: { model: 'deepseek-v4-pro', provider: 'deepseek' },
+      providers: [
+        {
+          authenticated: false,
+          id: 'openai-codex',
+          models: ['gpt-5.5'],
+          name: 'ChatGPT',
+          setup: 'oauth'
+        },
+        {
+          authenticated: true,
+          id: 'deepseek',
+          models: ['deepseek-v4-pro'],
+          name: 'DeepSeek',
+          setup: 'api-key'
+        }
+      ]
+    })
+
+    render(
+      <MacManChat client={client} loadModelCatalog={loadModelCatalog} onManageModels={onManageModels} />
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose model, currently gpt-5.5' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in with ChatGPT' }))
+
+    expect(onManageModels).toHaveBeenCalledWith('openai-codex')
   })
 
   it('starts the particle canvas when the cached mark loads immediately', async () => {
