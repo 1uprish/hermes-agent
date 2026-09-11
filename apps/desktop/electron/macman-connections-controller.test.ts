@@ -6,6 +6,7 @@ import { createMacManConnectionsController } from './macman-connections-controll
 
 function fakeDependencies(overrides: Record<string, unknown> = {}) {
   const backendRequests: Array<{ body?: unknown; method?: string; path: string }> = []
+  const openedSettings: string[] = []
   const runs: Array<{ args: string[]; executable: string }> = []
   const executables: Record<string, string | null> = {
     gmail: '/bundle/gog',
@@ -16,6 +17,7 @@ function fakeDependencies(overrides: Record<string, unknown> = {}) {
 
   return {
     backendRequests,
+    openedSettings,
     rememberedAccounts,
     runs,
     dependencies: {
@@ -40,6 +42,9 @@ function fakeDependencies(overrides: Record<string, unknown> = {}) {
       },
       rememberAccount(account: { connector: string; displayName: string; externalId: string }) {
         rememberedAccounts.push(account)
+      },
+      async openSystemSettings(permission: string) {
+        openedSettings.push(permission)
       },
       async request(request: { body?: unknown; method?: string; path: string }) {
         backendRequests.push(request)
@@ -263,7 +268,24 @@ test('iMessage setup does not remember a connection when the CLI exits zero with
 
   await assert.rejects(() => controller.authorizeIMessage(), /Full Disk Access/i)
   assert.deepEqual(fake.rememberedAccounts, [])
+  assert.deepEqual(fake.openedSettings, ['fullDiskAccess'])
   assert.equal(fake.runs.length, 1)
+})
+
+test('iMessage setup opens Automation settings when Messages Data is available but sending is blocked', async () => {
+  const fake = fakeDependencies({
+    runConnector: async (executable: string, args: string[]) => {
+      fake.runs.push({ args, executable })
+      return args.at(-1) === 'messages-data'
+        ? { exitCode: 0, stderr: '', stdout: '[ok] Messages Data - available.' }
+        : { exitCode: 0, stderr: '', stdout: '[ ] Automation - denied.' }
+    }
+  })
+  const controller = createMacManConnectionsController(fake.dependencies)
+
+  await assert.rejects(() => controller.authorizeIMessage(), /Automation/i)
+  assert.deepEqual(fake.openedSettings, ['automation'])
+  assert.deepEqual(fake.rememberedAccounts, [])
 })
 
 test('legacy iMessage receipts are not accepted as proof of current permission verification', async () => {
