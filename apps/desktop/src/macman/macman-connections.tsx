@@ -16,6 +16,7 @@ type ConnectionsBridge = Pick<
   | 'authorizeIMessage'
   | 'cancelWhatsAppConnection'
   | 'connectGmail'
+  | 'disconnectIMessage'
   | 'getConnectionCatalog'
   | 'pollWhatsAppConnection'
   | 'startWhatsAppConnection'
@@ -56,6 +57,10 @@ function errorMessage(error: unknown): string {
 
 function actionLabel(connection: MacManConnectionSnapshot): string {
   if (connection.status === 'connected') {
+    if (connection.id === 'imessage') {
+      return 'Disconnect iMessage'
+    }
+
     return `Reconnect ${connection.name}`
   }
 
@@ -224,6 +229,20 @@ export function MacManConnections({ bridge, pollIntervalMs = 1_200 }: MacManConn
     }
   }
 
+  const disconnectIMessage = async () => {
+    setActionError(undefined)
+    setBusyConnection('imessage')
+
+    try {
+      await bridge.disconnectIMessage()
+      await refresh()
+    } catch (error) {
+      setActionError(errorMessage(error))
+    } finally {
+      setBusyConnection(undefined)
+    }
+  }
+
   const connectGmail = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setActionError(undefined)
@@ -249,7 +268,11 @@ export function MacManConnections({ bridge, pollIntervalMs = 1_200 }: MacManConn
     if (connection.id === 'whatsapp') {
       void startWhatsApp()
     } else if (connection.id === 'imessage') {
-      void authorizeIMessage()
+      if (connection.status === 'connected') {
+        void disconnectIMessage()
+      } else {
+        void authorizeIMessage()
+      }
     } else {
       setActionError(undefined)
       setGmailEmail(connection.account ?? '')

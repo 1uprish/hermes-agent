@@ -1812,6 +1812,18 @@ const macManConnectionsController = createMacManConnectionsController({
   getIMessageDataDirectory() {
     return path.join(MACMAN_CONNECTION_DATA_ROOT, 'imessage')
   },
+  getConnectionEnabled(id) {
+    return macManConnectionStore.getConnectionEnabled(id)
+  },
+  async hasMessagesDatabaseAccess() {
+    try {
+      const handle = await fs.promises.open(path.join(app.getPath('home'), 'Library', 'Messages', 'chat.db'), 'r')
+      await handle.close()
+      return true
+    } catch {
+      return false
+    }
+  },
   getRememberedAccount(id, externalId) {
     return macManConnectionStore.listAccounts(id).find(account => !externalId || account.externalId === externalId) ?? null
   },
@@ -1826,6 +1838,9 @@ const macManConnectionsController = createMacManConnectionsController({
     const interactive = args.includes('add') || args.includes('authorize')
 
     return runMacManConnector(executable, args, { timeoutMs: interactive ? 6 * 60_000 : 30_000 })
+  },
+  setConnectionEnabled(id, enabled) {
+    macManConnectionStore.setConnectionEnabled(id, enabled)
   }
 })
 
@@ -16575,6 +16590,12 @@ ipcMain.handle('macman:connections:imessage:authorize', () => {
   assertMacManDistribution()
 
   return macManConnectionsController.authorizeIMessage()
+})
+
+ipcMain.handle('macman:connections:imessage:disconnect', () => {
+  assertMacManDistribution()
+
+  return macManConnectionsController.disconnectIMessage()
 })
 
 ipcMain.handle('macman:connections:gmail:connect', (_event, email) => {

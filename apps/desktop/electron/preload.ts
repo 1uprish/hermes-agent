@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('macManNative', {
   cancelWhatsAppConnection: pairingId => ipcRenderer.invoke('macman:connections:whatsapp:cancel', pairingId),
   checkForUpdates: () => ipcRenderer.invoke('hermes:updates:check'),
   connectGmail: email => ipcRenderer.invoke('macman:connections:gmail:connect', email),
+  disconnectIMessage: () => ipcRenderer.invoke('macman:connections:imessage:disconnect'),
   exportData: data => ipcRenderer.invoke('macman:data:export', data),
   getChatConnection: () => ipcRenderer.invoke('hermes:connection'),
   getConnectionCatalog: () => ipcRenderer.invoke('macman:connections:catalog'),

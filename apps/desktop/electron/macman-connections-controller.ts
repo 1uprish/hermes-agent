@@ -48,6 +48,8 @@ export interface MacManConnectionsDependencies {
   getGmailCredentialsPath(): null | string
   getGmailHome(): string
   getIMessageDataDirectory(): string
+  getConnectionEnabled(id: MacManConnectionId): boolean | undefined
+  hasMessagesDatabaseAccess(): Promise<boolean>
   getRememberedAccount(
     id: MacManConnectionId,
     externalId?: string
@@ -56,6 +58,7 @@ export interface MacManConnectionsDependencies {
   rememberAccount(account: { connector: MacManConnectionId; displayName: string; externalId: string }): void
   request(request: BackendRequest): Promise<unknown>
   runConnector(executable: string, args: string[]): Promise<ConnectorRunResult>
+  setConnectionEnabled(id: MacManConnectionId, enabled: boolean): void
 }
 
 const CAPABILITIES = {
@@ -214,12 +217,32 @@ export function createMacManConnectionsController(dependencies: MacManConnection
       return unavailable('imessage', 'iMessage')
     }
 
+    if (dependencies.getConnectionEnabled('imessage') === false) {
+      return {
+        capabilities: [...CAPABILITIES.imessage],
+        detail: 'Disconnected from MacMan. macOS permissions are unchanged.',
+        id: 'imessage',
+        name: 'iMessage',
+        status: 'ready'
+      }
+    }
+
     const remembered = dependencies.getRememberedAccount('imessage', IMESSAGE_VERIFIED_ACCOUNT_ID)
 
     if (remembered?.externalId !== IMESSAGE_VERIFIED_ACCOUNT_ID) {
       return {
         capabilities: [...CAPABILITIES.imessage],
         detail: 'Allow Messages Data for history and Automation for sending.',
+        id: 'imessage',
+        name: 'iMessage',
+        status: 'needs-permission'
+      }
+    }
+
+    if (!(await dependencies.hasMessagesDatabaseAccess())) {
+      return {
+        capabilities: [...CAPABILITIES.imessage],
+        detail: 'MacMan needs Full Disk Access to read and search your Messages history.',
         id: 'imessage',
         name: 'iMessage',
         status: 'needs-permission'
@@ -314,6 +337,11 @@ export function createMacManConnectionsController(dependencies: MacManConnection
         dependencies.getIMessageDataDirectory()
       ]
 
+      if (!(await dependencies.hasMessagesDatabaseAccess())) {
+        await dependencies.openSystemSettings('fullDiskAccess')
+        throw new Error('Enable MacMan in Full Disk Access, then return here and click Set up again.')
+      }
+
       const messagesData = await dependencies.runConnector(executable, [...baseArgs, 'authorize', 'messages-data'])
       try {
         requireIMessagePermission(
@@ -342,6 +370,7 @@ export function createMacManConnectionsController(dependencies: MacManConnection
         displayName: 'Messages on this Mac',
         externalId: IMESSAGE_VERIFIED_ACCOUNT_ID
       })
+      dependencies.setConnectionEnabled('imessage', true)
     },
 
     async cancelWhatsApp(pairingId: string): Promise<void> {
@@ -411,6 +440,10 @@ export function createMacManConnectionsController(dependencies: MacManConnection
         '--gmail-scope=read-send'
       ])
       requireSuccessful(loginResult, 'Google sign-in did not complete')
+    },
+
+    async disconnectIMessage(): Promise<void> {
+      dependencies.setConnectionEnabled('imessage', false)
     },
 
     async pollWhatsApp(pairingId: string): Promise<MacManWhatsAppSetup> {

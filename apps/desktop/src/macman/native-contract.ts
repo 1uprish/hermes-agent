@@ -111,6 +111,7 @@ export type MacManNativeBridge = {
   cancelWhatsAppConnection(pairingId: string): Promise<void>
   checkForUpdates(): Promise<unknown>
   connectGmail(email: string): Promise<void>
+  disconnectIMessage(): Promise<void>
   exportData(data: unknown): Promise<{ canceled: boolean; path?: string }>
   getChatConnection(): Promise<MacManChatConnection>
   getConnectionCatalog(): Promise<MacManConnectionCatalog>

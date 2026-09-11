@@ -33,6 +33,7 @@ function bridge(overrides: Partial<MacManNativeBridge> = {}): MacManNativeBridge
     cancelWhatsAppConnection: vi.fn(),
     checkForUpdates: vi.fn(),
     connectGmail: vi.fn(),
+    disconnectIMessage: vi.fn(),
     exportData: vi.fn(),
     getChatConnection: vi.fn().mockResolvedValue({ authMode: 'token', wsUrl: 'ws://macman.test/ws' }),
     getConnectionCatalog: vi.fn().mockResolvedValue({ connections: [] }),

@@ -149,6 +149,12 @@ export function createMacManConnectionStore({ databasePath, now = () => new Date
       UNIQUE (connector, external_id)
     );
 
+    CREATE TABLE IF NOT EXISTS connection_preferences (
+      connector TEXT PRIMARY KEY CHECK (connector IN ('whatsapp', 'imessage', 'gmail')),
+      enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
       account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -260,6 +266,26 @@ export function createMacManConnectionStore({ databasePath, now = () => new Date
       displayName: String(row.display_name),
       externalId: String(row.external_id)
     }))
+  }
+
+  function getConnectionEnabled(connector: MacManConnectorId): boolean | undefined {
+    const row = database
+      .prepare('SELECT enabled FROM connection_preferences WHERE connector = ?')
+      .get(connector) as { enabled?: number } | undefined
+
+    return row?.enabled === undefined ? undefined : row.enabled === 1
+  }
+
+  function setConnectionEnabled(connector: MacManConnectorId, enabled: boolean): void {
+    database
+      .prepare(`
+        INSERT INTO connection_preferences (connector, enabled, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT (connector) DO UPDATE SET
+          enabled = excluded.enabled,
+          updated_at = excluded.updated_at
+      `)
+      .run(connector, enabled ? 1 : 0, now())
   }
 
   function ensureAccount(connector: MacManConnectorId, externalId: string): string {
@@ -512,6 +538,7 @@ export function createMacManConnectionStore({ databasePath, now = () => new Date
   return {
     close: () => database.close(),
     enqueueOutbox,
+    getConnectionEnabled,
     getOutbox,
     ingestMessage,
     listAccounts,
@@ -520,6 +547,7 @@ export function createMacManConnectionStore({ databasePath, now = () => new Date
     markOutboxSending,
     markOutboxSent,
     searchMessages,
+    setConnectionEnabled,
     upsertAccount,
     upsertConversation
   }
