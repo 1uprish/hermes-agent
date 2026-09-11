@@ -17,6 +17,7 @@ test('MacMan packaging signs concrete bundled connector paths', () => {
 
   assert.deepEqual(binaries, [
     'Contents/Resources/cua-driver',
+    'Contents/Resources/macman-runtime/python/bin/python3.11',
     'Contents/Resources/macman-connectors/gmail/gog',
     'Contents/Resources/macman-connectors/imessage/universal/imessage-cli'
   ])

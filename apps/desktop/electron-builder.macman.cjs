@@ -46,6 +46,7 @@ module.exports = {
       from: 'dist/node_modules/@trycua/cua-driver-darwin-x64',
       to: 'macman-cua-sdk/node_modules/@trycua/cua-driver-darwin-x64'
     },
+    { from: 'build/macman-runtime', to: 'macman-runtime' },
     { from: 'build/macman-connectors', to: 'macman-connectors' },
     { from: 'THIRD_PARTY_NOTICES.md', to: 'THIRD_PARTY_NOTICES.md' }
   ],
@@ -54,6 +55,7 @@ module.exports = {
     ...base.mac,
     binaries: [
       'Contents/Resources/cua-driver',
+      'Contents/Resources/macman-runtime/python/bin/python3.11',
       'Contents/Resources/macman-connectors/gmail/gog',
       'Contents/Resources/macman-connectors/imessage/universal/imessage-cli'
     ],

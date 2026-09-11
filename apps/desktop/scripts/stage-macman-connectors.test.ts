@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -8,10 +8,31 @@ import { test } from 'vitest'
 
 import {
   MACMAN_CONNECTOR_ARTIFACTS,
+  rewriteAbsoluteSymlinks,
   selectMacManConnectorArtifacts,
   stageMacManGmailOAuthClient,
   verifyMacManConnectorArtifact
 } from './stage-macman-connectors.mjs'
+
+test('runtime staging rewrites host-absolute links to relocatable in-bundle links', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'macman-runtime-links-'))
+  const source = join(directory, 'source')
+  const destination = join(directory, 'destination')
+
+  try {
+    mkdirSync(join(source, 'bin'), { recursive: true })
+    mkdirSync(join(destination, 'bin'), { recursive: true })
+    writeFileSync(join(source, 'bin', 'python3.11'), '')
+    writeFileSync(join(destination, 'bin', 'python3.11'), '')
+    symlinkSync(join(source, 'bin', 'python3.11'), join(destination, 'bin', 'python3'))
+
+    rewriteAbsoluteSymlinks(destination, source, destination)
+
+    assert.equal(readlinkSync(join(destination, 'bin', 'python3')), 'python3.11')
+  } finally {
+    rmSync(directory, { force: true, recursive: true })
+  }
+})
 
 test('MacMan packages local iMessage, Gmail, and WhatsApp runtimes instead of installing during a task', () => {
   const artifacts = selectMacManConnectorArtifacts({ arch: 'arm64', platform: 'darwin' })
