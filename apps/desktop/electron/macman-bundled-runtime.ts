@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 export interface MacManBundledRuntime {
+  launcher: string
   python: string
   pythonRoot: string
   sitePackages: string
@@ -13,13 +14,16 @@ export function resolveMacManBundledRuntime(resourcesPath: string): MacManBundle
   const pythonRoot = join(root, 'python')
 
   const runtime = {
+    launcher: join(pythonRoot, 'bin', 'hermes'),
     python: join(pythonRoot, 'bin', 'python3.11'),
     pythonRoot,
     sitePackages: join(root, 'site-packages'),
     sourceRoot: join(root, 'source')
   }
 
-  return [runtime.python, runtime.sitePackages, join(runtime.sourceRoot, 'hermes_cli', 'main.py')].every(existsSync)
+  return [runtime.launcher, runtime.python, runtime.sitePackages, join(runtime.sourceRoot, 'hermes_cli', 'main.py')].every(
+    existsSync
+  )
     ? runtime
     : null
 }

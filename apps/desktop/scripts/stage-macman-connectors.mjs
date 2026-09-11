@@ -6,11 +6,14 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -22,6 +25,23 @@ import { isMain } from './utils.mjs'
 const here = dirname(fileURLToPath(import.meta.url))
 const desktopRoot = resolve(here, '..')
 const repositoryRoot = resolve(desktopRoot, '../..')
+
+const MACMAN_RUNTIME_SOURCE_DIRECTORIES = Object.freeze([
+  'acp_adapter',
+  'agent',
+  'assets',
+  'cron',
+  'gateway',
+  'hermes_cli',
+  'locales',
+  'optional-mcps',
+  'optional-skills',
+  'plugins',
+  'providers',
+  'skills',
+  'tools',
+  'tui_gateway'
+])
 
 export const MACMAN_CONNECTOR_ARTIFACTS = Object.freeze([
   {
@@ -193,6 +213,141 @@ function stageWhatsApp(destinationRoot) {
   return relative(destinationRoot, join(destination, 'bridge.js')).split(sep).join('/')
 }
 
+function pythonRuntimeLayout(pythonExecutable) {
+  const script = [
+    'import json, site, sys',
+    'print(json.dumps({"base_prefix": sys.base_prefix, "site_packages": site.getsitepackages()}))'
+  ].join('; ')
+  const result = spawnSync(pythonExecutable, ['-c', script], { encoding: 'utf8' })
+
+  if (result.status !== 0) {
+    throw new Error(`Could not inspect MacMan Python runtime: ${(result.stderr || result.stdout || '').trim()}`)
+  }
+
+  const parsed = JSON.parse(result.stdout)
+  const sitePackages = parsed.site_packages?.find(candidate => candidate.includes(`${sep}site-packages`))
+
+  if (!parsed.base_prefix || !sitePackages || !existsSync(join(parsed.base_prefix, 'bin', 'python3.11'))) {
+    throw new Error('MacMan requires a CPython 3.11 environment with installed project dependencies')
+  }
+
+  return { basePrefix: parsed.base_prefix, sitePackages }
+}
+
+export function rewriteAbsoluteSymlinks(root, sourceRoot, destinationRoot) {
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const candidate = join(root, entry.name)
+
+    if (entry.isDirectory()) {
+      rewriteAbsoluteSymlinks(candidate, sourceRoot, destinationRoot)
+      continue
+    }
+
+    if (!lstatSync(candidate).isSymbolicLink()) {
+      continue
+    }
+
+    const target = readlinkSync(candidate)
+
+    if (!isAbsolute(target)) {
+      continue
+    }
+
+    const sourceRelativeTarget = relative(sourceRoot, target)
+
+    if (isAbsolute(sourceRelativeTarget) || sourceRelativeTarget.split(sep).includes('..')) {
+      throw new Error(`MacMan runtime symlink escapes its source: ${candidate} -> ${target}`)
+    }
+
+    const packagedTarget = join(destinationRoot, sourceRelativeTarget)
+    rmSync(candidate)
+    symlinkSync(relative(dirname(candidate), packagedTarget), candidate)
+  }
+}
+
+export function stageMacManRuntime({
+  connectorRoot,
+  destinationRoot = join(desktopRoot, 'build', 'macman-runtime'),
+  pythonExecutable = process.env.MACMAN_RUNTIME_PYTHON?.trim() || join(repositoryRoot, '.venv', 'bin', 'python'),
+  sourceRoot = repositoryRoot
+} = {}) {
+  if (!existsSync(pythonExecutable)) {
+    throw new Error(`MacMan runtime Python is missing at ${pythonExecutable}; run uv sync first`)
+  }
+
+  const layout = pythonRuntimeLayout(pythonExecutable)
+  const pythonRoot = join(destinationRoot, 'python')
+  const packagedSitePackages = join(destinationRoot, 'site-packages')
+  const packagedSource = join(destinationRoot, 'source')
+
+  rmSync(destinationRoot, { force: true, recursive: true })
+  mkdirSync(destinationRoot, { mode: 0o755, recursive: true })
+  cpSync(layout.basePrefix, pythonRoot, { dereference: true, recursive: true })
+  rewriteAbsoluteSymlinks(pythonRoot, layout.basePrefix, pythonRoot)
+  writeFileSync(
+    join(pythonRoot, 'bin', 'hermes'),
+    '#!/bin/sh\nSCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$SCRIPT_DIR/python3.11" -m hermes_cli.main "$@"\n',
+    { mode: 0o755 }
+  )
+  cpSync(layout.sitePackages, packagedSitePackages, {
+    filter: candidate => {
+      const name = basename(candidate)
+
+      return !name.startsWith('__editable__.hermes_agent-') && !name.startsWith('__editable___hermes_agent_')
+    },
+    recursive: true
+  })
+  rewriteAbsoluteSymlinks(packagedSitePackages, layout.sitePackages, packagedSitePackages)
+
+  mkdirSync(packagedSource, { mode: 0o755, recursive: true })
+
+  for (const entry of readdirSync(sourceRoot, { withFileTypes: true })) {
+    if (entry.isFile() && (entry.name.endsWith('.py') || ['pyproject.toml', 'VERSION'].includes(entry.name))) {
+      cpSync(join(sourceRoot, entry.name), join(packagedSource, entry.name))
+    }
+  }
+
+  for (const directory of MACMAN_RUNTIME_SOURCE_DIRECTORIES) {
+    const source = join(sourceRoot, directory)
+
+    if (existsSync(source)) {
+      cpSync(source, join(packagedSource, directory), { recursive: true })
+    }
+  }
+
+  const stagedWhatsApp = connectorRoot && join(connectorRoot, 'whatsapp', 'universal')
+
+  if (!stagedWhatsApp || !existsSync(join(stagedWhatsApp, 'node_modules'))) {
+    throw new Error('Stage the MacMan WhatsApp connector before staging the bundled runtime')
+  }
+
+  const packagedScripts = join(packagedSource, 'scripts')
+  mkdirSync(packagedScripts, { mode: 0o755, recursive: true })
+  symlinkSync(relative(packagedScripts, stagedWhatsApp), join(packagedScripts, 'whatsapp-bridge'), 'dir')
+
+  const probe = spawnSync(join(pythonRoot, 'bin', 'python3.11'), ['-c', 'import hermes_cli.main, fastapi, uvicorn'], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PYTHONHOME: pythonRoot,
+      PYTHONNOUSERSITE: '1',
+      PYTHONPATH: `${packagedSource}${sep === '\\' ? ';' : ':'}${packagedSitePackages}`
+    }
+  })
+
+  if (probe.status !== 0) {
+    throw new Error(`Bundled MacMan runtime failed its import probe: ${(probe.stderr || probe.stdout || '').trim()}`)
+  }
+
+  writeFileSync(
+    join(destinationRoot, 'manifest.json'),
+    `${JSON.stringify({ python: '3.11', source: 'MacMan release', selfContained: true }, null, 2)}\n`,
+    { mode: 0o644 }
+  )
+
+  return destinationRoot
+}
+
 export function stageMacManGmailOAuthClient(sourcePath, destinationRoot) {
   let payload
 
@@ -253,6 +408,8 @@ export async function stageMacManConnectors({
     writeFileSync(join(destinationRoot, 'manifest.json'), `${JSON.stringify({ connectors: manifest }, null, 2)}\n`, {
       mode: 0o644
     })
+
+    stageMacManRuntime({ connectorRoot: destinationRoot })
 
     return manifest
   } finally {
