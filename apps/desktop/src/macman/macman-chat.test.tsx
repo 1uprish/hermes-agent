@@ -63,6 +63,32 @@ describe('MacMan continuous chat', () => {
     expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: 'Message MacMan' }).value).toBe('')
   })
 
+  it('picks, previews, removes, and sends MacMan-owned attachments', async () => {
+    const client = fakeClient()
+    const pickAttachments = vi.fn().mockResolvedValue([
+      { kind: 'pdf', name: 'launch.pdf', path: '/tmp/launch.pdf' },
+      { kind: 'image', name: 'design.png', path: '/tmp/design.png' }
+    ])
+
+    render(<MacManChat client={client} pickAttachments={pickAttachments} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Attach files' }))
+    expect(await screen.findByText('launch.pdf')).toBeTruthy()
+    expect(screen.getByText('design.png')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove launch.pdf' }))
+    expect(screen.queryByText('launch.pdf')).toBeNull()
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message MacMan' }), {
+      target: { value: 'Use this design' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() => expect(client.send).toHaveBeenCalledWith('Use this design', [
+      { kind: 'image', name: 'design.png', path: '/tmp/design.png' }
+    ]))
+  })
+
   it('uses the MacMan mark as an accessible thinking state', async () => {
     const client = fakeClient({ ...readySnapshot, busy: true })
 

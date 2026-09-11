@@ -68,6 +68,72 @@ describe('MacMan chat session continuity', () => {
     })
   })
 
+  it('stages attachments before a busy send and forces the intact bundle into the queue', async () => {
+    const requests: Array<{ method: string; params?: Record<string, unknown> }> = []
+    const transport: MacManChatTransport = {
+      close: vi.fn(),
+      connect: vi.fn().mockResolvedValue(undefined),
+      onEvent: vi.fn(() => () => undefined),
+      request: async <T>(method: string, params?: Record<string, unknown>) => {
+        requests.push({ method, params })
+
+        if (method === 'session.list') {
+          return { sessions: [{ id: 'stored-chat', title: 'MacMan Chat' }] } as T
+        }
+
+        if (method === 'session.resume') {
+          return { messages: [], running: true, session_id: 'runtime-chat' } as T
+        }
+
+        if (method === 'image.attach') {
+          return { attached: true, path: params?.path, text: '[User attached image: design.png]' } as T
+        }
+
+        if (method === 'file.attach') {
+          return { attached: true, ref_text: '@file:notes.txt' } as T
+        }
+
+        return {
+          client_message_id: params?.client_message_id,
+          route: 'queue',
+          state: 'queued'
+        } as T
+      }
+    }
+    const client = createMacManChatClient(
+      {
+        getChatConnection: vi.fn().mockResolvedValue({ authMode: 'token', wsUrl: 'ws://macman.test/ws' }),
+        getFreshChatConnection: vi.fn()
+      },
+      () => transport
+    )
+
+    await client.connect()
+    await client.send('Use these in the brief', [
+      { kind: 'image', name: 'design.png', path: '/tmp/design.png' },
+      { kind: 'file', name: 'notes.txt', path: '/tmp/notes.txt' }
+    ])
+
+    expect(requests.slice(-3)).toEqual([
+      { method: 'image.attach', params: { path: '/tmp/design.png', session_id: 'runtime-chat' } },
+      { method: 'file.attach', params: { name: 'notes.txt', path: '/tmp/notes.txt', session_id: 'runtime-chat' } },
+      {
+        method: 'prompt.dispatch',
+        params: {
+          client_message_id: expect.stringMatching(/^macman-/),
+          requested_route: 'queue',
+          session_id: 'runtime-chat',
+          text: 'Use these in the brief\n\n[User attached image: design.png]\n@file:notes.txt'
+        }
+      }
+    ])
+    expect(client.getSnapshot().messages.at(-1)).toMatchObject({
+      attachments: [{ name: 'design.png' }, { name: 'notes.txt' }],
+      dispatch: { route: 'queue', state: 'queued' },
+      text: 'Use these in the brief'
+    })
+  })
+
   it('projects sanitized live work events and an independent background result', async () => {
     let emit: ((event: { payload?: Record<string, unknown>; session_id?: string; type: string }) => void) | undefined
     const transport: MacManChatTransport = {
