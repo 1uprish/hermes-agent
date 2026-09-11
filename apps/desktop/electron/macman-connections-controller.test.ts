@@ -77,6 +77,14 @@ function fakeDependencies(overrides: Record<string, unknown> = {}) {
           return { exitCode: 0, stderr: '', stdout: '{"accounts":[{"email":"arv@gmail.com"}]}' }
         }
 
+        if (executable.endsWith('/imessage-cli') && args.at(-1) === 'messages-data') {
+          return { exitCode: 0, stderr: '', stdout: '[ok] Messages Data - The CLI can read your local Messages data.' }
+        }
+
+        if (executable.endsWith('/imessage-cli') && args.at(-1) === 'automation') {
+          return { exitCode: 0, stderr: '', stdout: '[ok] Automation - Apple Events access to Messages.app is available.' }
+        }
+
         return { exitCode: 0, stderr: '', stdout: '{}' }
       },
       ...overrides
@@ -99,7 +107,7 @@ test('catalog reports provider truth and never treats an unprobed iMessage runti
       },
       {
         capabilities: ['read', 'search', 'send', 'attachments', 'reactions'],
-        detail: 'Authorize the bundled Messages connector to read and send iMessages on this Mac.',
+        detail: 'Allow Messages Data for history and Automation for sending.',
         id: 'imessage',
         name: 'iMessage',
         status: 'needs-permission'
@@ -123,7 +131,7 @@ test('successful iMessage authorization creates a durable connection receipt use
   await controller.authorizeIMessage()
 
   assert.deepEqual(fake.rememberedAccounts, [
-    { connector: 'imessage', displayName: 'Messages on this Mac', externalId: 'local-messages' }
+    { connector: 'imessage', displayName: 'Messages on this Mac', externalId: 'local-messages:v1' }
   ])
   assert.deepEqual((await controller.catalog()).connections[1], {
     account: 'Messages on this Mac',
@@ -222,14 +230,66 @@ test('Gmail is unavailable before sign-in when the release has no Google OAuth i
   })
 })
 
-test('iMessage setup invokes the bundled authorization UI from a user action', async () => {
+test('iMessage setup verifies the two required macOS permissions from a user action', async () => {
   const fake = fakeDependencies()
   const controller = createMacManConnectionsController(fake.dependencies)
 
   await controller.authorizeIMessage()
 
-  assert.deepEqual(fake.runs.at(-1), {
-    args: ['--data-dir', '/user/macman/imessage', 'authorize'],
-    executable: '/bundle/imessage-cli'
+  assert.deepEqual(fake.runs.slice(-2), [
+    {
+      args: ['--data-dir', '/user/macman/imessage', 'authorize', 'messages-data'],
+      executable: '/bundle/imessage-cli'
+    },
+    {
+      args: ['--data-dir', '/user/macman/imessage', 'authorize', 'automation'],
+      executable: '/bundle/imessage-cli'
+    }
+  ])
+})
+
+test('iMessage setup does not remember a connection when the CLI exits zero without Messages Data access', async () => {
+  const fake = fakeDependencies({
+    runConnector: async (executable: string, args: string[]) => {
+      fake.runs.push({ args, executable })
+      return { exitCode: 0, stderr: '', stdout: '[ ] Messages Data - Full Disk Access is still required.' }
+    }
   })
+  const controller = createMacManConnectionsController(fake.dependencies)
+
+  await assert.rejects(() => controller.authorizeIMessage(), /Full Disk Access/i)
+  assert.deepEqual(fake.rememberedAccounts, [])
+  assert.equal(fake.runs.length, 1)
+})
+
+test('legacy iMessage receipts are not accepted as proof of current permission verification', async () => {
+  const fake = fakeDependencies()
+  fake.rememberedAccounts.push({
+    connector: 'imessage',
+    displayName: 'Messages on this Mac',
+    externalId: 'local-messages'
+  })
+  const controller = createMacManConnectionsController(fake.dependencies)
+
+  assert.deepEqual((await controller.catalog()).connections[1], {
+    capabilities: ['read', 'search', 'send', 'attachments', 'reactions'],
+    detail: 'Allow Messages Data for history and Automation for sending.',
+    id: 'imessage',
+    name: 'iMessage',
+    status: 'needs-permission'
+  })
+})
+
+test('successful iMessage setup recognizes a verified receipt beside a legacy receipt', async () => {
+  const fake = fakeDependencies()
+  fake.rememberedAccounts.push({
+    connector: 'imessage',
+    displayName: 'Messages on this Mac',
+    externalId: 'local-messages'
+  })
+  const controller = createMacManConnectionsController(fake.dependencies)
+
+  await controller.authorizeIMessage()
+
+  assert.equal((await controller.catalog()).connections[1]?.status, 'connected')
 })
